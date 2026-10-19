@@ -50,7 +50,7 @@ alphanumeric username. `SWAG_PUBLIC_ORIGIN` is the exact browser origin.
   generation only. Second viewer takes over. Enforce Origin and a renewable lease.
   New WebSocket requests never launch applications.
 
-Per-user launchers own Xvnc/display, Openbox, vncconfig and Qt. The authenticated
+Per-user launchers own Xvnc/display, optional Openbox, vncconfig and Qt. The authenticated
 manager bridges opaque binary WebSocket frames directly to the user's RFB Unix
 socket, with bounded buffers and backpressure. Each display is unique. Runtime
 root: `/run/swag/users/{user}`; files/logs: `/artifacts/users/{user}/{generation}`.
@@ -65,11 +65,32 @@ helpers; the bank service/database survives. This does not globally end IdP SSO.
 
 New `src/desktop/` defines `swag-desktop`, linking Qt5 Widgets and Network. Retain
 the rendering probe. Root adds/install targets in top-level CMake and container.
-The desktop is fullscreen1280x800, with entity navigation, generated grid/forms,
+The desktop starts on a 1280x800 display, with entity navigation, generated grid/forms,
 reload/new/save/delete controls, paging/filtering, explicit unsaved draft and Quit.
 Use asynchronous QtNetwork calls. Show server errors and 409 conflicts without
 silently overwriting edits. The app never opens SQLite.
+Authenticated noVNC enables remote resizing to its browser container; the Qt root
+follows the current QScreen geometry without replacing the process. The active
+viewer controls dimensions. The private rendering probe remains fixed-size.
+Below an 800×600 browser canvas, remote resizing pauses and local scaling shows
+the whole existing desktop. Remote resizing resumes when both dimensions fit.
 
 Private observation JSON: `user`, `generation`, `pid`, `ready`, `entity`, `items`,
 `selected_id`, `dirty`, `error_text`, `draft`, `geometry` (named widgets -> global
 `[x,y,w,h]`). Form field geometry uses `field_<name>`. Browser tests only read it.
+
+Optional MDI mode uses `SWAG_UI_MODE=mdi` (default `single`). Every child owns its
+model/filter/form, including duplicate views of one entity. The shell retains
+global user/draft/Quit controls. Launcher defaults to no external window manager
+for MDI, Openbox for single mode; `SWAG_WINDOW_MANAGER=none|openbox` overrides it.
+The launcher manifest records `ui_mode`, `window_manager`, and actual helper PIDs.
+
+MDI observation adds `ui_mode`, `active_window_id` and `windows`: each child has a
+stable `window_id`, entity/title/active flag, its own state and global geometry.
+Existing top-level form/grid fields describe the active child. Shell geometry
+names: `mdi_open_button`, `mdi_tile_button`, `mdi_cascade_button`,
+`mdi_maximize_button`, `mdi_close_button`, `mdi_viewport`, `window_<id>` and
+`window_title_<id>`. Each child also reports `maximized` and `minimized`.
+Display observation adds `screen_geometry` (`[x,y,w,h]`), `framebuffer_size`
+(`[w,h]`) and `geometry.screen`. Tests map global widget coordinates through the
+actual canvas dimensions instead of assuming the startup resolution.

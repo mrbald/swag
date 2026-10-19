@@ -39,7 +39,9 @@ def write(path: Path, contents: str, mode=0o600):
     path.chmod(mode)
 
 
-def configure(port: int, dns: str = "127.0.0.11"):
+def configure(port: int, dns: str = "127.0.0.11", ui_mode: str = "single", window_manager: str | None = None):
+    if ui_mode not in {"single", "mdi"} or window_manager not in {None, "none", "openbox"}:
+        raise ValueError("invalid GUI mode or window manager")
     CONFIG.mkdir(parents=True, exist_ok=True)
     CONFIG.chmod(0o700)
     secret_file = CONFIG / "secrets.json"
@@ -93,14 +95,17 @@ def configure(port: int, dns: str = "127.0.0.11"):
     write(CONFIG / "nginx.conf", nginx, 0o644)
     write(CONFIG / "host.env", f"SWAG_PROXY_KEY={values['proxy']}\nSWAG_PUBLIC_ORIGIN={origin}\n"
           f"SWAG_SERVICE_TOKEN={values['service']}\nSWAG_BACKEND_URL=http://swag-bank:8081\n"
-          "SWAG_VIEWER_LEASE_SECONDS=30\n")
+          f"SWAG_UI_MODE={ui_mode}\n"
+          + (f"SWAG_WINDOW_MANAGER={window_manager}\n" if window_manager else "")
+          + "SWAG_VIEWER_LEASE_SECONDS=30\n")
     write(CONFIG / "bank.env", f"SWAG_SERVICE_TOKEN={values['service']}\nSWAG_DB_PATH=/data/bank.sqlite3\n")
     write(CONFIG / "keycloak.env", f"KC_BOOTSTRAP_ADMIN_USERNAME=admin\nKC_BOOTSTRAP_ADMIN_PASSWORD={values['admin']}\n"
           f"KC_HOSTNAME={origin}/auth\nKC_HTTP_RELATIVE_PATH=/auth\nKC_PROXY_HEADERS=xforwarded\n"
           "JAVA_OPTS_KC_HEAP=-Xms128m -Xmx512m\n")
     for directory in ("workspaces", "data"):
         (STATE / directory).mkdir(parents=True, exist_ok=True)
-    write(STATE / "public.json", json.dumps({"origin": origin, "users": ["alice", "bob"]}, indent=2))
+    write(STATE / "public.json", json.dumps({"origin": origin, "users": ["alice", "bob"],
+          "ui_mode": ui_mode, "window_manager": window_manager or ("none" if ui_mode == "mdi" else "openbox")}, indent=2))
 
 
 def down(engine: str):
@@ -132,7 +137,7 @@ for name,url in (('swag-host','http://127.0.0.1:8080/health'),('swag-bank','http
     return (True, "") if status.returncode == 0 else (False, status.stdout.strip() or "swag-host health probe")
 
 
-def up(engine: str, port: int):
+def up(engine: str, port: int, ui_mode: str = "single", window_manager: str | None = None):
     down(engine)
     if run(engine, "network", "inspect", NETWORK, check=False, capture=True).returncode:
         run(engine, "network", "create", "--label", "swag.stack=demo", NETWORK, capture=True)
@@ -142,7 +147,7 @@ def up(engine: str, port: int):
     # A stable service address models the VIP the real shared backend would have.
     # Qt5 caches DNS; a container restart must not strand existing GUI clients.
     bank_address = str(ipaddress.ip_network(subnet)[100])
-    configure(port, dns)
+    configure(port, dns, ui_mode, window_manager)
     common = ["run", "-d", "--network", NETWORK, "--label", "swag.stack=demo", "--init"]
     keep_id = ["--userns=keep-id:uid=1000,gid=1000"] if Path(engine).name == "podman" else []
 
@@ -187,7 +192,7 @@ def up(engine: str, port: int):
     for image in (APP_IMAGE, EDGE_IMAGE, KEYCLOAK_IMAGE, OAUTH_IMAGE):
         images[image] = json.loads(run(engine, "image", "inspect", image, capture=True).stdout)[0]["Id"]
     write(STATE / "images.json", json.dumps(images, indent=2))
-    print(f"Workspace: {origin}\nSynthetic logins: alice / demo, bob / demo\nState and logs: {STATE}")
+    print(f"Workspace: {origin}\nGUI mode: {ui_mode}\nSynthetic logins: alice / demo, bob / demo\nState and logs: {STATE}")
 
 
 def main():
@@ -195,11 +200,15 @@ def main():
     parser.add_argument("action", choices=("build", "up", "down"))
     parser.add_argument("--engine", default="podman")
     parser.add_argument("--port", default=6081, type=int)
+    parser.add_argument("--ui-mode", choices=("single", "mdi"), default="single",
+                        help="GUI mode for newly launched workspaces (up only)")
+    parser.add_argument("--window-manager", choices=("none", "openbox"),
+                        help="override: single defaults to Openbox, MDI defaults to none")
     args = parser.parse_args()
     if args.action == "build":
         build(args.engine)
     elif args.action == "up":
-        up(args.engine, args.port)
+        up(args.engine, args.port, args.ui_mode, args.window_manager)
     else:
         down(args.engine)
 

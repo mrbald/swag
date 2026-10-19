@@ -3,11 +3,11 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Portfolio workspace</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#e7edf2;color:#183248;font:14px system-ui}
-header{height:58px;background:#142c42;color:white;display:flex;align-items:center;gap:18px;padding:0 22px}
+*{box-sizing:border-box}html,body{height:100%}body{margin:0;background:#e7edf2;color:#183248;font:14px system-ui;display:flex;flex-direction:column;overflow:hidden}
+header{height:58px;flex-shrink:0;background:#142c42;color:white;display:flex;align-items:center;gap:18px;padding:0 22px}
 header strong{font-size:18px}#user{margin-left:auto}button{font:inherit;border:1px solid #b6c7d2;border-radius:4px;padding:7px 14px;cursor:pointer;background:white;color:#183248}button:disabled{opacity:.5;cursor:default}
-#bar{display:flex;align-items:center;gap:12px;padding:12px 22px;background:white;border-bottom:1px solid #c5d1da}#status{flex:1}
-#screen{margin:14px auto;width:calc(100vw - 32px);height:calc(100vh - 144px);background:#263b4b;overflow:hidden;border-radius:4px}
+#bar{display:flex;flex-wrap:wrap;flex-shrink:0;align-items:center;gap:12px;padding:12px 22px;background:white;border-bottom:1px solid #c5d1da}#status{flex:1;min-width:180px}
+#screen{margin:14px 16px;flex:1;min-width:0;min-height:0;background:#263b4b;overflow:hidden;border-radius:4px}
 #clipboard{width:260px;font:inherit;padding:7px;border:1px solid #b6c7d2;border-radius:4px}#empty{color:#dbe6ee;display:grid;place-items:center;height:100%;font-size:18px}
 </style></head>
 <body><header><strong>Portfolio workspace</strong><span>Implementation lab</span><span id="user"></span><button id="signout">End session &amp; sign out</button></header>
@@ -22,6 +22,17 @@ const loginURL='/oauth2/start?rd=/';
 class ObsoleteRequest extends Error {}
 class LoginExpired extends Error {}
 function status(text){$('status').textContent=text;}
+function resizeMode(current=rfb){
+  if(!current)return;
+  const {width,height}=$('screen').getBoundingClientRect();
+  // Below a usable desktop size, scale the existing framebuffer in full.
+  const remote=width>=800&&height>=600;
+  if(current.resizeSession!==remote)current.resizeSession=remote;
+}
+// Install before RFB's own observer, so shrinking below the floor disables
+// remote resizing before it can request an unusably small framebuffer.
+const resizeObserver=new ResizeObserver(()=>resizeMode());resizeObserver.observe($('screen'));
+addEventListener('resize',()=>resizeMode());
 function disconnect(){if(rfb){const old=rfb;rfb=null;old.disconnect();}connectedGeneration=null;}
 function report(error){if(!(error instanceof ObsoleteRequest)&&!(error instanceof LoginExpired)&&!signingOut)status(error.message);}
 async function api(method='GET',path='/session',body){
@@ -39,7 +50,7 @@ function attach(){
   if(stopped||rfb||session?.state!=='running')return;
   $('empty')?.remove();connectedGeneration=session.generation;
   const socket=`${location.protocol==='https:'?'wss':'ws'}://${location.host}/viewer/${encodeURIComponent(session.generation)}/websockify`;
-  const current=rfb=new RFB($('screen'),socket,{shared:true});current.scaleViewport=true;current.resizeSession=false;
+  const current=rfb=new RFB($('screen'),socket,{shared:true});current.scaleViewport=true;resizeMode(current);
   current.addEventListener('connect',()=>{if(rfb===current){status('Connected');show();}});
   current.addEventListener('disconnect',()=>{if(rfb===current){rfb=null;status('Viewer disconnected. Rejoin to take control.');$('start').textContent='Rejoin workspace';$('start').disabled=false;}});
   current.addEventListener('clipboard',event=>{$('clipboard').value=event.detail.text;});

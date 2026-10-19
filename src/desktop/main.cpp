@@ -19,6 +19,10 @@
 #include <QListWidget>
 #include <QMainWindow>
 #include <QMessageBox>
+#include <QMdiArea>
+#include <QMdiSubWindow>
+#include <QResizeEvent>
+#include <QShortcut>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -27,6 +31,7 @@
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QSaveFile>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSplitter>
@@ -35,6 +40,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVBoxLayout>
+#include <QWindow>
 
 #include <cerrno>
 #include <cstdio>
@@ -74,6 +80,16 @@ public:
           token_(qgetenv("SWAG_SERVICE_TOKEN")), user_(qgetenv("SWAG_USER")) {
         while (base_.endsWith(QLatin1Char('/')))
             base_.chop(1);
+    }
+
+    void cancelAll() {
+        // Disconnect callbacks before abort: abort can synchronously emit finished.
+        // Each pane owns its API client, so a closed read-only pane cannot leave
+        // callbacks referring to its destroyed form/model.
+        for (auto *reply : network_.findChildren<QNetworkReply *>()) {
+            QObject::disconnect(reply, nullptr, this, nullptr);
+            reply->abort();
+        }
     }
 
     void request(const QByteArray &method, const QString &path, const QUrlQuery &query,
@@ -192,52 +208,64 @@ private:
     QJsonArray rows_;
 };
 
-class DesktopWindow final : public QMainWindow {
-public:
-    DesktopWindow()
-        : api_(this), user_(qEnvironmentVariable("SWAG_USER", "local diagnostic")),
-          generation_(qEnvironmentVariable("SWAG_GENERATION", "local")),
-          stateFile_(qEnvironmentVariable("SWAG_STATE_FILE")) {
-        setWindowTitle(QStringLiteral("SWAG · Banking workspace"));
-        setObjectName(QStringLiteral("desktop_window"));
-        resize(1280, 800);
-        auto *body = new QWidget(this);
-        auto *layout = new QVBoxLayout(body);
-        layout->setContentsMargins(12, 10, 12, 10);
-        layout->setSpacing(9);
-        auto *header = new QHBoxLayout;
-        auto *title = new QLabel(QStringLiteral("SWAG  /  Banking workspace"), body);
-        auto font = title->font();
-        font.setBold(true);
-        font.setPointSize(14);
-        title->setFont(font);
-        header->addWidget(title);
-        header->addStretch();
-        header->addWidget(new QLabel(QStringLiteral("Signed in: %1").arg(user_), body));
-        quit_ = button(QStringLiteral("Quit"), QStringLiteral("quit_button"), body);
-        header->addWidget(quit_);
-        layout->addLayout(header);
-        auto *draftRow = new QHBoxLayout;
-        draftRow->addWidget(new QLabel(QStringLiteral("Unsaved workspace note"), body));
-        draft_ = new QLineEdit(QStringLiteral("Draft: café 東京"), body);
-        draft_->setObjectName(QStringLiteral("draft"));
-        draft_->setPlaceholderText(QStringLiteral("This note remains in this running workspace when you reconnect"));
-        draftRow->addWidget(draft_, 1);
-        layout->addLayout(draftRow);
+QPushButton *makeButton(const QString &label, const QString &name, QWidget *parent) {
+    auto *result = new QPushButton(label, parent);
+    result->setObjectName(name);
+    return result;
+}
 
-        auto *splitter = new QSplitter(Qt::Horizontal, body);
-        entities_ = new QListWidget(splitter);
-        entities_->setObjectName(QStringLiteral("entity_list"));
-        entities_->setMinimumWidth(160);
-        entities_->setMaximumWidth(205);
+QJsonArray widgetBounds(const QWidget *widget) {
+    const auto point = widget->mapToGlobal(QPoint(0, 0));
+    return {point.x(), point.y(), widget->width(), widget->height()};
+}
+
+void openMessageBox(QMessageBox *box) {
+    // Qt manages the entire dialog, including its border: no Openbox dependency.
+    box->setWindowFlags(Qt::Dialog | Qt::FramelessWindowHint | Qt::BypassWindowManagerHint);
+    box->setWindowModality(Qt::WindowModal);
+    const QPointer<QWidget> previousFocus(QApplication::focusWidget());
+    const QPointer<QWidget> owner(box->parentWidget() ? box->parentWidget()->window() : nullptr);
+    QObject::connect(box, &QMessageBox::finished, owner, [owner, previousFocus] {
+        if (!owner) return;
+        QTimer::singleShot(0, owner, [owner, previousFocus] {
+            if (!owner) return;
+            owner->raise();
+            owner->activateWindow();
+            if (previousFocus && previousFocus->isVisible()) previousFocus->setFocus();
+        });
+    });
+    box->open();
+    QTimer::singleShot(0, box, [box] {
+        box->adjustSize();
+        if (auto *owner = box->parentWidget()) {
+            const auto center = owner->window()->mapToGlobal(owner->window()->rect().center());
+            box->move(center - box->rect().center());
+        }
+        box->raise();
+        box->activateWindow();
+        if (box->defaultButton()) box->defaultButton()->setFocus();
+    });
+}
+
+class EntityPane final : public QWidget {
+public:
+    explicit EntityPane(QWidget *parent = nullptr) : QWidget(parent), api_(this) {
+        setObjectName(QStringLiteral("entity_pane"));
+        auto *body = this;
+        auto *layout = new QVBoxLayout(this);
+        layout->setSizeConstraint(QLayout::SetNoConstraint);
+        layout->setContentsMargins(3, 0, 3, 0);
+        layout->setSpacing(7);
+        setMinimumSize(430, 300);
+        auto *splitter = new QSplitter(Qt::Horizontal, this);
         auto *workspace = new QWidget(splitter);
         auto *center = new QVBoxLayout(workspace);
         center->setContentsMargins(3, 0, 3, 0);
         entityTitle_ = new QLabel(QStringLiteral("Connecting to bank service…"), workspace);
-        font = entityTitle_->font();
+        auto font = entityTitle_->font();
         font.setBold(true);
         entityTitle_->setFont(font);
-        center->addWidget(entityTitle_);
+        layout->addWidget(entityTitle_);
         auto *toolbar = new QHBoxLayout;
         filter_ = new QLineEdit(workspace);
         filter_->setObjectName(QStringLiteral("filter"));
@@ -251,7 +279,7 @@ public:
         toolbar->addWidget(new_);
         toolbar->addWidget(save_);
         toolbar->addWidget(delete_);
-        center->addLayout(toolbar);
+        layout->addLayout(toolbar);
         model_ = new EntityModel(this);
         grid_ = new QTableView(workspace);
         grid_->setObjectName(QStringLiteral("grid"));
@@ -281,7 +309,7 @@ public:
         center->addLayout(paging);
 
         details_ = new QGroupBox(QStringLiteral("Row details"), splitter);
-        details_->setMinimumWidth(325);
+        details_->setMinimumWidth(245);
         details_->setMaximumWidth(410);
         auto *detailLayout = new QVBoxLayout(details_);
         formTitle_ = new QLabel(QStringLiteral("Select a row or create a new one."), details_);
@@ -305,7 +333,8 @@ public:
         formButtons->addWidget(formSave_, 1);
         formButtons->addWidget(formCancel_);
         detailLayout->addLayout(formButtons);
-        splitter->setSizes({170, 730, 350});
+        splitter->setSizes({700, 330});
+        contentSplitter_ = splitter;
         layout->addWidget(splitter, 1);
         status_ = new QLabel(QStringLiteral("Loading schema…"), body);
         status_->setObjectName(QStringLiteral("status"));
@@ -313,11 +342,10 @@ public:
         status_->setWordWrap(true);
         status_->setTextInteractionFlags(Qt::TextSelectableByMouse);
         layout->addWidget(status_);
-        setCentralWidget(body);
+        entityTitle_->setWordWrap(true);
+        grid_->setMinimumHeight(65);
+        scroll->setMinimumHeight(60);
 
-        connect(quit_, &QPushButton::clicked, this, &QWidget::close);
-        connect(draft_, &QLineEdit::textChanged, this, [this] { record(QStringLiteral("draft_changed")); });
-        connect(entities_, &QListWidget::currentRowChanged, this, [this](int row) { selectEntity(row); });
         connect(grid_->selectionModel(), &QItemSelectionModel::currentRowChanged, this,
                 [this](const QModelIndex &current, const QModelIndex &) {
             if (changingSelection_ || loading_ || !current.isValid())
@@ -345,7 +373,6 @@ public:
         });
         connect(reload_, &QPushButton::clicked, this, [this] {
             if (uncertainWrite_) { reconcileWrite(); return; }
-            if (schema_.isEmpty()) { loadSchema(); return; }
             if (canNavigate()) loadRows();
         });
         connect(filter_, &QLineEdit::returnPressed, this, [this] {
@@ -367,51 +394,40 @@ public:
         connect(next_, &QPushButton::clicked, this, [this] {
             if (canNavigate()) { offset_ += pageSize_; loadRows(); }
         });
-        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
-            ready_ = false;
-            record(QStringLiteral("quit"));
-        });
-        auto *timer = new QTimer(this);
-        timer->setInterval(200);
-        connect(timer, &QTimer::timeout, this, [this] { writeState(); });
-        timer->start();
         updateControls();
-        QTimer::singleShot(0, this, [this] {
-            ready_ = true;
-            record(QStringLiteral("ready"));
-            loadSchema();
-        });
     }
+    ~EntityPane() override { changed_ = {}; api_.cancelAll(); }
+    void setChanged(std::function<void(const QString &)> callback) { changed_ = std::move(callback); }
+    bool setSchema(const QJsonArray &schema, int index) { schema_ = schema; return selectEntity(index); }
+    bool dirty() const { return dirty_; }
+    bool writing() const { return writing_; }
+    bool uncertain() const { return uncertainWrite_; }
+    bool loading() const { return loading_; }
+    int entityIndex() const { return entityIndex_; }
+    QString label() const { return entityTitle_->text(); }
+    QString name() const { return entityName(); }
+    void focusGrid() { grid_->setFocus(); }
+    QJsonObject snapshot() const { return observation(); }
+    bool changeEntity(int row) { return selectEntity(row); }
+    void showFailure(const QString &text) { setError(text); }
 
 protected:
-    void closeEvent(QCloseEvent *event) override {
-        if (allowClose_ || (!dirty_ && !writing_ && !uncertainWrite_)) {
-            event->accept();
-            return;
-        }
-        event->ignore();
-        if (closePrompt_)
-            return;
-        auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Quit workspace"),
-            writing_ || uncertainWrite_
-                ? QStringLiteral("A write has an unconfirmed result. Quit and discard the retained form?")
-                : QStringLiteral("This form has unsaved changes. Quit and discard them?"),
-            QMessageBox::Discard | QMessageBox::Cancel, this);
-        closePrompt_ = box;
-        box->setDefaultButton(QMessageBox::Cancel);
-        box->setAttribute(Qt::WA_DeleteOnClose);
-        connect(box, &QMessageBox::finished, this, [this](int result) {
-            if (result == QMessageBox::Discard) { allowClose_ = true; close(); }
-        });
-        box->open();
+    void resizeEvent(QResizeEvent *event) override {
+        QWidget::resizeEvent(event);
+        // Keep grid rows visible beside the scrollable form in tiled frames.
+        // The title and toolbar span the pane rather than narrowing the grid.
+        const bool narrow = width() < 850;
+        details_->setMinimumWidth(narrow ? 0 : 245);
+        details_->setMaximumWidth(narrow ? QWIDGETSIZE_MAX : 410);
+        contentSplitter_->setOrientation(Qt::Horizontal);
     }
 
 private:
     static QPushButton *button(const QString &label, const QString &name, QWidget *parent) {
-        auto *result = new QPushButton(label, parent);
-        result->setObjectName(name);
-        return result;
+        return makeButton(label, name, parent);
     }
+    void notifyChanged() { if (changed_) changed_(QStringLiteral("pane_changed")); }
+    void record(const QString &event) { if (changed_) changed_(event); }
     QString entityName() const { return entity_.value(QStringLiteral("name")).toString(); }
     QJsonArray fields() const { return entity_.value(QStringLiteral("fields")).toArray(); }
     bool canNavigate() {
@@ -471,38 +487,14 @@ private:
             dirty_ = false;
             loadRows(id);
         });
-        box->open();
+        openMessageBox(box);
         record(QStringLiteral("reconcile_confirmation"));
     }
-    void loadSchema() {
-        if (loading_ || writing_)
-            return;
-        loading_ = true;
-        updateControls();
-        api_.request("GET", QStringLiteral("schema"), {}, {}, [this](ApiResult result) {
-            loading_ = false;
-            if (!result.ok()) { apiError(result); updateControls(); return; }
-            schema_ = result.body.value(QStringLiteral("entities")).toArray();
-            if (schema_.isEmpty()) { setError(QStringLiteral("The service returned an empty schema.")); updateControls(); return; }
-            const QSignalBlocker blocker(entities_);
-            entities_->clear();
-            for (const auto &value : schema_) {
-                const auto entity = value.toObject();
-                auto *item = new QListWidgetItem(entity.value(QStringLiteral("label")).toString(entity.value(QStringLiteral("name")).toString()), entities_);
-                item->setData(Qt::UserRole, entity.value(QStringLiteral("name")).toString());
-                item->setSizeHint(QSize(150, 36));
-            }
-            entities_->setCurrentRow(0);
-            selectEntity(0);
-        });
-    }
-    void selectEntity(int row) {
+    bool selectEntity(int row) {
         if (row < 0 || row >= schema_.size())
-            return;
+            return false;
         if (!canNavigate()) {
-            const QSignalBlocker blocker(entities_);
-            entities_->setCurrentRow(entityIndex_);
-            return;
+            return false;
         }
         entityIndex_ = row;
         entity_ = schema_.at(row).toObject();
@@ -516,6 +508,7 @@ private:
         model_->setEntity(fields());
         grid_->horizontalHeader()->setSortIndicator(0, Qt::AscendingOrder);
         loadRows();
+        return true;
     }
     void loadRows(const QJsonValue &preferId = {}) {
         if (entityName().isEmpty() || loading_ || writing_)
@@ -884,14 +877,13 @@ private:
                 loadRows();
             });
         });
-        box->open();
+        openMessageBox(box);
         record(QStringLiteral("delete_confirmation"));
     }
     void updateControls() {
         const bool idle = !loading_ && !writing_;
         const bool reconciled = idle && !uncertainWrite_;
         const bool hasEntity = !entityName().isEmpty();
-        entities_->setEnabled(reconciled);
         filter_->setEnabled(reconciled && hasEntity);
         reload_->setEnabled(idle);
         new_->setEnabled(reconciled && hasEntity);
@@ -904,6 +896,7 @@ private:
         next_->setEnabled(reconciled && offset_ + pageSize_ < total_);
         formBody_->setEnabled(!writing_);
         details_->setTitle(dirty_ ? QStringLiteral("Row details · Unsaved changes") : QStringLiteral("Row details"));
+        notifyChanged();
     }
     static QJsonArray bounds(const QWidget *widget) {
         const auto point = widget->mapToGlobal(QPoint(0, 0));
@@ -913,34 +906,19 @@ private:
         const auto point = widget->mapToGlobal(rect.topLeft());
         return {point.x(), point.y(), rect.width(), rect.height()};
     }
-    void record(const QString &event) {
-        lastEvent_ = event;
-        ++sequence_;
-        writeState();
-    }
-    void writeState() {
-        if (stateFile_.isEmpty()) return;
+    QJsonObject observation() const {
         QJsonObject geometry{
             {QStringLiteral("window"), bounds(this)},
-            {QStringLiteral("entity_list"), bounds(entities_)},
             {QStringLiteral("grid_viewport"), bounds(grid_->viewport())},
             {QStringLiteral("filter"), bounds(filter_)},
             {QStringLiteral("new_button"), bounds(new_)},
             {QStringLiteral("save_button"), bounds(save_)},
             {QStringLiteral("delete_button"), bounds(delete_)},
             {QStringLiteral("reload_button"), bounds(reload_)},
-            {QStringLiteral("draft"), bounds(draft_)},
-            {QStringLiteral("quit_button"), bounds(quit_)},
             {QStringLiteral("paging"), bounds(page_)},
             {QStringLiteral("previous_button"), bounds(previous_)},
             {QStringLiteral("next_button"), bounds(next_)}
         };
-        for (int i = 0; i < entities_->count(); ++i) {
-            auto *item = entities_->item(i);
-            const auto rect = entities_->visualItemRect(item);
-            if (rect.intersects(entities_->viewport()->rect()))
-                geometry.insert(QStringLiteral("entity_") + item->data(Qt::UserRole).toString(), rectBounds(entities_->viewport(), rect));
-        }
         for (int row = 0; row < model_->rowCount(); ++row) {
             const auto rect = grid_->visualRect(model_->index(row, 0));
             if (rect.intersects(grid_->viewport()->rect()))
@@ -967,17 +945,12 @@ private:
             }
         }
         QJsonObject state{
-            {QStringLiteral("user"), user_},
-            {QStringLiteral("generation"), generation_},
-            {QStringLiteral("pid"), QCoreApplication::applicationPid()},
-            {QStringLiteral("ready"), ready_},
             {QStringLiteral("entity"), entityName()},
             {QStringLiteral("entities"), schema_},
             {QStringLiteral("items"), model_->rows()},
             {QStringLiteral("selected_id"), selectedId_.isUndefined() ? QJsonValue(QJsonValue::Null) : selectedId_},
             {QStringLiteral("dirty"), dirty_},
             {QStringLiteral("error_text"), error_},
-            {QStringLiteral("draft"), draft_->text()},
             {QStringLiteral("form_open"), formOpen_},
             {QStringLiteral("form_values"), formOpen_ ? formValues() : QJsonObject{}},
             {QStringLiteral("creating"), creating_},
@@ -986,16 +959,536 @@ private:
             {QStringLiteral("uncertain_write"), uncertainWrite_},
             {QStringLiteral("offset"), offset_},
             {QStringLiteral("total"), total_},
-            {QStringLiteral("last_event"), lastEvent_},
-            {QStringLiteral("event_sequence"), sequence_},
             {QStringLiteral("focus_widget"), QApplication::focusWidget() ? QApplication::focusWidget()->objectName() : QString()},
             {QStringLiteral("geometry"), geometry}
         };
+        return state;
+    }
+    ApiClient api_;
+    QSplitter *contentSplitter_{};
+    std::function<void(const QString &)> changed_;
+    QJsonArray schema_;
+    QJsonObject entity_;
+    QJsonObject original_;
+    QJsonObject baseline_;
+    QHash<QString, QWidget *> editors_;
+    QJsonValue selectedId_;
+    EntityModel *model_{};
+    QTableView *grid_{};
+    QLineEdit *filter_{};
+    QGroupBox *details_{};
+    QWidget *formBody_{};
+    QFormLayout *formLayout_{};
+    QLabel *entityTitle_{};
+    QLabel *formTitle_{};
+    QLabel *page_{};
+    QLabel *status_{};
+    QPushButton *reload_{};
+    QPushButton *new_{};
+    QPushButton *save_{};
+    QPushButton *delete_{};
+    QPushButton *previous_{};
+    QPushButton *next_{};
+    QPushButton *formSave_{};
+    QPushButton *formCancel_{};
+    QPointer<QMessageBox> deletePrompt_;
+    QPointer<QMessageBox> reconcilePrompt_;
+    int entityIndex_{-1};
+    int offset_{};
+    int total_{};
+    static constexpr int pageSize_ = 25;
+    QString sort_{QStringLiteral("id")};
+    QString appliedFilter_;
+    QString error_;
+    int formGeneration_{};
+    bool loading_{};
+    bool writing_{};
+    bool uncertainWrite_{};
+    bool formOpen_{};
+    bool creating_{};
+    bool dirty_{};
+    bool descending_{};
+    bool buildingForm_{};
+    bool changingSelection_{};
+};
+
+class GuardedSubWindow final : public QMdiSubWindow {
+public:
+    using QMdiSubWindow::QMdiSubWindow;
+    std::function<bool()> mayClose;
+    bool discardApproved{};
+protected:
+    void closeEvent(QCloseEvent *event) override {
+        if (discardApproved || !mayClose || mayClose()) QMdiSubWindow::closeEvent(event);
+        else event->ignore();
+    }
+};
+
+class DesktopWindow final : public QMainWindow {
+public:
+    DesktopWindow()
+        : api_(this), user_(qEnvironmentVariable("SWAG_USER", "local diagnostic")),
+          generation_(qEnvironmentVariable("SWAG_GENERATION", "local")),
+          stateFile_(qEnvironmentVariable("SWAG_STATE_FILE")),
+          mdiMode_(qEnvironmentVariable("SWAG_UI_MODE", "single") == QStringLiteral("mdi")) {
+        setWindowTitle(QStringLiteral("SWAG · Banking workspace"));
+        setObjectName(QStringLiteral("desktop_window"));
+        if (mdiMode_) setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+        if (const auto *screen = QGuiApplication::primaryScreen()) setGeometry(screen->geometry());
+        auto *body = new QWidget(this);
+        auto *layout = new QVBoxLayout(body);
+        layout->setContentsMargins(12, 10, 12, 10);
+        layout->setSpacing(9);
+        auto *header = new QHBoxLayout;
+        auto *title = new QLabel(QStringLiteral("SWAG  /  Banking workspace"), body);
+        auto font = title->font(); font.setBold(true); font.setPointSize(14); title->setFont(font);
+        header->addWidget(title);
+        header->addStretch();
+        header->addWidget(new QLabel(QStringLiteral("Signed in: %1").arg(user_), body));
+        quit_ = makeButton(QStringLiteral("Quit"), QStringLiteral("quit_button"), body);
+        header->addWidget(quit_);
+        layout->addLayout(header);
+        auto *draftRow = new QHBoxLayout;
+        draftRow->addWidget(new QLabel(QStringLiteral("Unsaved workspace note"), body));
+        draft_ = new QLineEdit(QStringLiteral("Draft: café 東京"), body);
+        draft_->setObjectName(QStringLiteral("draft"));
+        draft_->setPlaceholderText(QStringLiteral("This note remains in this running workspace when you reconnect"));
+        draftRow->addWidget(draft_, 1);
+        layout->addLayout(draftRow);
+        auto *splitter = new QSplitter(Qt::Horizontal, body);
+        auto *navigation = new QWidget(splitter);
+        auto *navigationLayout = new QVBoxLayout(navigation);
+        navigationLayout->setContentsMargins(0, 0, 0, 0);
+        entities_ = new QListWidget(navigation);
+        entities_->setObjectName(QStringLiteral("entity_list"));
+        entities_->setMinimumWidth(160);
+        navigation->setMaximumWidth(205);
+        navigationLayout->addWidget(entities_, 1);
+        if (mdiMode_) {
+            open_ = makeButton(QStringLiteral("Open new window"), QStringLiteral("mdi_open_button"), navigation);
+            open_->setToolTip(QStringLiteral("Open another independent frame for the selected entity (Ctrl+N)"));
+            navigationLayout->addWidget(open_);
+            tile_ = makeButton(QStringLiteral("Tile"), QStringLiteral("mdi_tile_button"), navigation);
+            cascade_ = makeButton(QStringLiteral("Cascade"), QStringLiteral("mdi_cascade_button"), navigation);
+            maximize_ = makeButton(QStringLiteral("Maximize active"), QStringLiteral("mdi_maximize_button"), navigation);
+            close_ = makeButton(QStringLiteral("Close active"), QStringLiteral("mdi_close_button"), navigation);
+            navigationLayout->addWidget(tile_);
+            navigationLayout->addWidget(cascade_);
+            navigationLayout->addWidget(maximize_);
+            navigationLayout->addWidget(close_);
+            auto *help = new QLabel(QStringLiteral("Ctrl+Tab: next frame\nCtrl+W: close frame"), navigation);
+            help->setWordWrap(true);
+            navigationLayout->addWidget(help);
+            mdi_ = new QMdiArea(splitter);
+            mdi_->setObjectName(QStringLiteral("mdi_area"));
+            mdi_->setViewMode(QMdiArea::SubWindowView);
+            mdi_->setActivationOrder(QMdiArea::ActivationHistoryOrder);
+            mdi_->setOption(QMdiArea::DontMaximizeSubWindowOnActivation, true);
+            mdi_->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            mdi_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+            connect(open_, &QPushButton::clicked, this, [this] { openPane(entities_->currentRow()); });
+            connect(tile_, &QPushButton::clicked, mdi_, &QMdiArea::tileSubWindows);
+            connect(cascade_, &QPushButton::clicked, mdi_, &QMdiArea::cascadeSubWindows);
+            connect(maximize_, &QPushButton::clicked, this, [this] {
+                if (auto *window = mdi_->activeSubWindow()) {
+                    if (window->isMaximized()) window->showNormal();
+                    else window->showMaximized();
+                }
+            });
+            connect(close_, &QPushButton::clicked, this, [this] { closeActivePane(); });
+            connect(mdi_, &QMdiArea::subWindowActivated, this, [this](QMdiSubWindow *window) {
+                if (window) {
+                    if (auto *pane = static_cast<EntityPane *>(window->widget())) {
+                        const QSignalBlocker blocker(entities_);
+                        entities_->setCurrentRow(pane->entityIndex());
+                    }
+                }
+                updateShellControls();
+                record(QStringLiteral("window_activated"));
+            });
+            auto *next = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Tab")), this);
+            connect(next, &QShortcut::activated, mdi_, &QMdiArea::activateNextSubWindow);
+            auto *previous = new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+Tab")), this);
+            connect(previous, &QShortcut::activated, mdi_, &QMdiArea::activatePreviousSubWindow);
+            // QMdiSubWindow already installs QKeySequence::Close (Ctrl+W on
+            // Linux). A second shell shortcut makes the focused frame's native
+            // action ambiguous, suppressing both rather than closing it.
+            auto *newShortcut = new QShortcut(QKeySequence(QStringLiteral("Ctrl+N")), this);
+            connect(newShortcut, &QShortcut::activated, this, [this] { openPane(entities_->currentRow()); });
+        } else {
+            single_ = new EntityPane(splitter);
+            single_->setChanged([this](const QString &event) { updateShellControls(); record(event); });
+        }
+        splitter->setSizes({170, 1080});
+        layout->addWidget(splitter, 1);
+        shellStatus_ = new QLabel(QStringLiteral("Loading schema…"), body);
+        shellStatus_->setWordWrap(true);
+        layout->addWidget(shellStatus_);
+        setCentralWidget(body);
+        connect(quit_, &QPushButton::clicked, this, &QWidget::close);
+        connect(draft_, &QLineEdit::textChanged, this, [this] { record(QStringLiteral("draft_changed")); });
+        connect(entities_, &QListWidget::currentRowChanged, this, [this](int row) {
+            if (row < 0 || row >= schema_.size()) return;
+            if (mdiMode_) {
+                selectFrame(row);
+            } else if (single_ && !single_->changeEntity(row)) {
+                const QSignalBlocker blocker(entities_); entities_->setCurrentRow(single_->entityIndex());
+            }
+        });
+        connect(entities_, &QListWidget::itemClicked, this, [this](QListWidgetItem *) {
+            // currentRowChanged does not fire when the last frame for the
+            // already-selected entity was closed. Selection and click share
+            // the same activate-or-open operation, so one click creates once.
+            if (mdiMode_) selectFrame(entities_->currentRow());
+        });
+        connect(entities_, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem *) {
+            if (mdiMode_) openPane(entities_->currentRow());
+        });
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { ready_ = false; record(QStringLiteral("quit")); });
+        auto *timer = new QTimer(this);
+        timer->setInterval(200);
+        connect(timer, &QTimer::timeout, this, [this] { writeState(); });
+        timer->start();
+        updateShellControls();
+        QTimer::singleShot(0, this, [this] { ready_ = true; record(QStringLiteral("ready")); loadSchema(); });
+    }
+
+    void followScreen() {
+        if (!followingScreen_) {
+            followingScreen_ = true;
+            if (auto *handle = windowHandle())
+                connect(handle, &QWindow::screenChanged, this, [this](QScreen *screen) { watchScreen(screen); });
+            connect(qApp, &QGuiApplication::primaryScreenChanged, this, [this](QScreen *screen) {
+                if (!screen_) watchScreen(screen);
+            });
+        }
+        watchScreen(windowHandle() ? windowHandle()->screen() : QGuiApplication::primaryScreen());
+    }
+
+    ~DesktopWindow() override {
+        QObject::disconnect(screenGeometryConnection_);
+        api_.cancelAll();
+        if (single_) single_->setChanged({});
+        for (const auto &window : windows_) {
+            if (!window) continue;
+            window->disconnect(this);
+            window->mayClose = {};
+            if (window->widget()) static_cast<EntityPane *>(window->widget())->setChanged({});
+        }
+        if (mdi_) mdi_->disconnect(this);
+    }
+
+protected:
+    void closeEvent(QCloseEvent *event) override {
+        if (allowClose_) { event->accept(); return; }
+        bool dirty = false, writing = false, uncertain = false;
+        for (auto *pane : panes()) {
+            dirty |= pane->dirty(); writing |= pane->writing(); uncertain |= pane->uncertain();
+        }
+        if (!dirty && !writing && !uncertain) { event->accept(); return; }
+        event->ignore();
+        if (closePrompt_) return;
+        if (writing) {
+            showCloseBlocked(QStringLiteral("Quit workspace"),
+                QStringLiteral("A frame is saving or deleting. Wait for its result before quitting the workspace."));
+            return;
+        }
+        auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Quit workspace"),
+            uncertain
+                ? QStringLiteral("A frame has an unconfirmed write result. Quit the entire workspace and discard all retained forms?")
+                : QStringLiteral("One or more frames have unsaved changes. Quit the entire workspace and discard all forms?"),
+            QMessageBox::Discard | QMessageBox::Cancel, this);
+        closePrompt_ = box;
+        box->setDefaultButton(QMessageBox::Cancel);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        connect(box, &QMessageBox::finished, this, [this](int result) {
+            // Preflight the entire collection: cancellation never closes any pane.
+            if (result == QMessageBox::Discard) { allowClose_ = true; close(); }
+        });
+        openMessageBox(box);
+        record(QStringLiteral("quit_confirmation"));
+    }
+
+private:
+    void watchScreen(QScreen *screen) {
+        if (!screen) screen = QGuiApplication::primaryScreen();
+        if (screen_ != screen) {
+            QObject::disconnect(screenGeometryConnection_);
+            screen_ = screen;
+            if (screen_)
+                screenGeometryConnection_ = connect(screen_, &QScreen::geometryChanged, this, [this] {
+                    // Apply after Qt has processed the RandR screen update.
+                    QTimer::singleShot(0, this, [this] { fitScreen(); });
+                });
+        }
+        fitScreen();
+    }
+    void fitScreen() {
+        if (!screen_) return;
+        // Fullscreen geometry must be explicit when Xvnc has no window manager.
+        // A browser remote-resize changes QScreen without replacing the app.
+        setGeometry(screen_->geometry());
+        QTimer::singleShot(0, this, [this] {
+            if (mdi_) keepFrameVisible(mdi_->activeSubWindow());
+            if (auto *modal = QApplication::activeModalWidget())
+                modal->move(mapToGlobal(rect().center()) - modal->rect().center());
+            record(QStringLiteral("screen_geometry_changed"));
+        });
+    }
+    QList<EntityPane *> panes() const {
+        if (single_) return {single_};
+        QList<EntityPane *> result;
+        for (const auto &window : windows_) if (window && window->widget()) result << static_cast<EntityPane *>(window->widget());
+        return result;
+    }
+    EntityPane *activePane() const {
+        if (single_) return single_;
+        return mdi_ && mdi_->activeSubWindow() ? static_cast<EntityPane *>(mdi_->activeSubWindow()->widget()) : nullptr;
+    }
+    void showCloseBlocked(const QString &title, const QString &message) {
+        auto *box = new QMessageBox(QMessageBox::Warning, title, message, QMessageBox::Ok, this);
+        closePrompt_ = box;
+        box->setDefaultButton(QMessageBox::Ok);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        openMessageBox(box);
+        record(QStringLiteral("close_blocked"));
+    }
+    bool mayClosePane(GuardedSubWindow *window, EntityPane *pane) {
+        if (pane->writing()) {
+            if (!closePrompt_) showCloseBlocked(QStringLiteral("Close frame"),
+                QStringLiteral("This frame is saving or deleting. Wait for its result before closing it."));
+            return false;
+        }
+        if (!pane->dirty() && !pane->uncertain()) return true;
+        if (closePrompt_) return false;
+        auto *box = new QMessageBox(QMessageBox::Warning, QStringLiteral("Close frame"),
+            pane->uncertain()
+                ? QStringLiteral("This frame has an unconfirmed write result. Close it and discard the retained form?")
+                : QStringLiteral("This frame has unsaved changes. Close it and discard the form?"),
+            QMessageBox::Discard | QMessageBox::Cancel, this);
+        closePrompt_ = box;
+        box->setDefaultButton(QMessageBox::Cancel);
+        box->setAttribute(Qt::WA_DeleteOnClose);
+        const QPointer<GuardedSubWindow> guarded(window);
+        connect(box, &QMessageBox::finished, this, [guarded](int result) {
+            if (result == QMessageBox::Discard && guarded) { guarded->discardApproved = true; guarded->close(); }
+        });
+        openMessageBox(box);
+        record(QStringLiteral("frame_close_confirmation"));
+        return false;
+    }
+    void closeActivePane() {
+        if (mdi_ && mdi_->activeSubWindow()) mdi_->activeSubWindow()->close();
+    }
+    void keepFrameVisible(QMdiSubWindow *window) {
+        if (!window || window->isMaximized() || window->isMinimized()) return;
+        const auto available = mdi_->viewport()->size();
+        window->resize(qMin(window->width(), available.width()), qMin(window->height(), available.height()));
+        window->move(qBound(0, window->pos().x(), qMax(0, available.width() - window->width())),
+                     qBound(0, window->pos().y(), qMax(0, available.height() - window->height())));
+    }
+    void selectFrame(int index) {
+        if (!mdi_ || index < 0 || index >= schema_.size()) return;
+        if (auto *active = mdi_->activeSubWindow()) {
+            if (active->widget() && static_cast<EntityPane *>(active->widget())->entityIndex() == index) {
+                if (active->isMinimized()) active->showNormal();
+                keepFrameVisible(active);
+                active->raise();
+                return;
+            }
+        }
+        for (const auto &window : windows_) {
+            if (!window || !window->widget() || static_cast<EntityPane *>(window->widget())->entityIndex() != index) continue;
+            if (window->isMinimized()) window->showNormal();
+            keepFrameVisible(window);
+            mdi_->setActiveSubWindow(window);
+            window->raise();
+            return;
+        }
+        openPane(index);
+    }
+    void openPane(int index) {
+        if (!mdi_ || index < 0 || index >= schema_.size()) return;
+        auto *window = new GuardedSubWindow;
+        const QString id = QString::number(++windowSequence_);
+        window->setObjectName(QStringLiteral("mdi_window_") + id);
+        window->setProperty("swag_id", id);
+        auto *pane = new EntityPane;
+        window->setWidget(pane);
+        window->setAttribute(Qt::WA_DeleteOnClose);
+        window->mayClose = [this, window, pane] { return mayClosePane(window, pane); };
+        mdi_->addSubWindow(window);
+        windows_ << window;
+        pane->setChanged([this, window, pane](const QString &event) {
+            QString title = pane->label() + QStringLiteral(" · ") + window->property("swag_id").toString();
+            if (pane->dirty()) title += QStringLiteral(" *");
+            if (pane->writing()) title += QStringLiteral(" · Saving…");
+            if (pane->uncertain()) title += QStringLiteral(" · Write outcome unknown");
+            window->setWindowTitle(title);
+            updateShellControls(); record(event);
+        });
+        connect(window, &QObject::destroyed, this, [this] {
+            for (int i = windows_.size() - 1; i >= 0; --i) if (!windows_.at(i)) windows_.removeAt(i);
+            updateShellControls(); record(QStringLiteral("window_closed"));
+        });
+        connect(window, &QMdiSubWindow::windowStateChanged, this, [this] {
+            updateShellControls(); record(QStringLiteral("window_state_changed"));
+        });
+        pane->setSchema(schema_, index);
+        window->resize(qMin(990, mdi_->viewport()->width() - 20), qMin(615, mdi_->viewport()->height() - 20));
+        window->show();
+        // QMdiArea's default placement may put a large child mostly outside
+        // its viewport. Cascade only within the available horizontal/vertical
+        // slack, wrapping offsets so every new frame is fully reachable.
+        const int offset = (windows_.size() - 1) * 24;
+        const int horizontalSlack = qMax(0, mdi_->viewport()->width() - window->width());
+        const int verticalSlack = qMax(0, mdi_->viewport()->height() - window->height());
+        window->move(horizontalSlack ? offset % (horizontalSlack + 1) : 0,
+                     verticalSlack ? offset % (verticalSlack + 1) : 0);
+        keepFrameVisible(window);
+        mdi_->setActiveSubWindow(window);
+        pane->focusGrid();
+        record(QStringLiteral("window_opened"));
+    }
+    void loadSchema() {
+        if (schemaLoading_) return;
+        schemaLoading_ = true;
+        shellStatus_->setText(QStringLiteral("Loading schema…"));
+        updateShellControls();
+        api_.request("GET", QStringLiteral("schema"), {}, {}, [this](ApiResult result) {
+            schemaLoading_ = false;
+            schema_ = result.body.value(QStringLiteral("entities")).toArray();
+            if (!result.ok() || schema_.isEmpty()) {
+                shellError_ = result.error.isEmpty() ? QStringLiteral("The service returned an empty schema.") : result.error;
+                shellStatus_->setText(shellError_ + QStringLiteral(" Retrying…"));
+                shellStatus_->setStyleSheet(QStringLiteral("color:#a51c20;"));
+                if (single_) single_->showFailure(shellError_);
+                updateShellControls(); record(QStringLiteral("schema_failed"));
+                QTimer::singleShot(3000, this, [this] { loadSchema(); });
+                return;
+            }
+            shellError_.clear();
+            shellStatus_->setStyleSheet({});
+            shellStatus_->setText(mdiMode_
+                ? QStringLiteral("Select an entity to open or activate a frame. Open new window creates an independent copy; * marks unsaved changes.")
+                : QString());
+            shellStatus_->setVisible(mdiMode_);
+            {
+                const QSignalBlocker blocker(entities_);
+                entities_->clear();
+                for (const auto &value : schema_) {
+                    const auto entity = value.toObject();
+                    auto *item = new QListWidgetItem(entity.value(QStringLiteral("label")).toString(entity.value(QStringLiteral("name")).toString()), entities_);
+                    item->setData(Qt::UserRole, entity.value(QStringLiteral("name")).toString());
+                    item->setSizeHint(QSize(150, 36));
+                }
+                entities_->setCurrentRow(0);
+            }
+            if (single_) single_->setSchema(schema_, 0);
+            else openPane(0);
+            updateShellControls(); record(QStringLiteral("schema_loaded"));
+        });
+    }
+    void updateShellControls() {
+        const bool available = !schema_.isEmpty() && !schemaLoading_;
+        entities_->setEnabled(available && (mdiMode_ || !single_ || (!single_->loading() && !single_->writing() && !single_->uncertain())));
+        if (open_) open_->setEnabled(available);
+        if (tile_) tile_->setEnabled(mdi_ && !mdi_->subWindowList().isEmpty());
+        if (cascade_) cascade_->setEnabled(tile_->isEnabled());
+        if (maximize_) {
+            const auto *active = mdi_->activeSubWindow();
+            maximize_->setEnabled(active);
+            maximize_->setText(active && active->isMaximized() ? QStringLiteral("Restore active") : QStringLiteral("Maximize active"));
+        }
+        if (close_) close_->setEnabled(mdi_ && mdi_->activeSubWindow());
+    }
+    void record(const QString &event) { lastEvent_ = event; ++sequence_; writeState(); }
+    void writeState() {
+        if (stateFile_.isEmpty()) return;
+        QJsonObject state = activePane() ? activePane()->snapshot() : QJsonObject{
+            {QStringLiteral("entity"), QString()}, {QStringLiteral("items"), QJsonArray{}},
+            {QStringLiteral("selected_id"), QJsonValue(QJsonValue::Null)}, {QStringLiteral("dirty"), false},
+            {QStringLiteral("form_open"), false}, {QStringLiteral("form_values"), QJsonObject{}},
+            {QStringLiteral("creating"), false}, {QStringLiteral("loading"), schemaLoading_},
+            {QStringLiteral("writing"), false}, {QStringLiteral("uncertain_write"), false},
+            {QStringLiteral("offset"), 0}, {QStringLiteral("total"), 0}, {QStringLiteral("error_text"), shellError_}
+        };
+        QJsonObject geometry = state.value(QStringLiteral("geometry")).toObject();
+        geometry.insert(QStringLiteral("window"), widgetBounds(this));
+        if (screen_) {
+            const auto screenRect = screen_->geometry();
+            const QJsonArray screenBounds{screenRect.x(), screenRect.y(), screenRect.width(), screenRect.height()};
+            geometry.insert(QStringLiteral("screen"), screenBounds);
+            state.insert(QStringLiteral("screen_geometry"), screenBounds);
+            state.insert(QStringLiteral("framebuffer_size"), QJsonArray{screenRect.width(), screenRect.height()});
+        }
+        geometry.insert(QStringLiteral("entity_list"), widgetBounds(entities_));
+        geometry.insert(QStringLiteral("draft"), widgetBounds(draft_));
+        geometry.insert(QStringLiteral("quit_button"), widgetBounds(quit_));
+        for (int i = 0; i < entities_->count(); ++i) {
+            auto *item = entities_->item(i);
+            const auto rect = entities_->visualItemRect(item);
+            if (rect.intersects(entities_->viewport()->rect())) {
+                const auto point = entities_->viewport()->mapToGlobal(rect.topLeft());
+                geometry.insert(QStringLiteral("entity_") + item->data(Qt::UserRole).toString(), QJsonArray{point.x(), point.y(), rect.width(), rect.height()});
+            }
+        }
+        QJsonArray windows;
+        QJsonValue activeId(QJsonValue::Null);
+        if (mdi_) {
+            geometry.insert(QStringLiteral("mdi_viewport"), widgetBounds(mdi_->viewport()));
+            geometry.insert(QStringLiteral("mdi_open_button"), widgetBounds(open_));
+            geometry.insert(QStringLiteral("mdi_tile_button"), widgetBounds(tile_));
+            geometry.insert(QStringLiteral("mdi_cascade_button"), widgetBounds(cascade_));
+            geometry.insert(QStringLiteral("mdi_maximize_button"), widgetBounds(maximize_));
+            geometry.insert(QStringLiteral("mdi_close_button"), widgetBounds(close_));
+            for (const auto &window : windows_) {
+                if (!window || !window->widget()) continue;
+                auto *pane = static_cast<EntityPane *>(window->widget());
+                auto item = pane->snapshot();
+                const auto id = window->property("swag_id").toString();
+                const bool active = mdi_->activeSubWindow() == window;
+                item.insert(QStringLiteral("window_id"), id);
+                item.insert(QStringLiteral("title"), window->windowTitle());
+                item.insert(QStringLiteral("active"), active);
+                item.insert(QStringLiteral("maximized"), window->isMaximized());
+                item.insert(QStringLiteral("minimized"), window->isMinimized());
+                auto childGeometry = item.value(QStringLiteral("geometry")).toObject();
+                childGeometry.insert(QStringLiteral("window"), widgetBounds(window));
+                const auto titlePoint = window->mapToGlobal(QPoint(0, 0));
+                const int titleHeight = qMax(20, pane->mapTo(window, QPoint(0, 0)).y());
+                QJsonArray titleBounds{titlePoint.x() + 6, titlePoint.y() + 2, qMax(10, window->width() - 110), titleHeight - 2};
+                childGeometry.insert(QStringLiteral("window_title"), titleBounds);
+                item.insert(QStringLiteral("geometry"), childGeometry);
+                geometry.insert(QStringLiteral("window_") + id, widgetBounds(window));
+                geometry.insert(QStringLiteral("window_title_") + id, titleBounds);
+                windows.append(item);
+                if (active) activeId = id;
+            }
+        }
+        if (auto *modal = QApplication::activeModalWidget()) {
+            geometry.insert(QStringLiteral("modal"), widgetBounds(modal));
+            if (auto *box = qobject_cast<QMessageBox *>(modal))
+                for (auto *action : box->buttons())
+                    geometry.insert(QStringLiteral("modal_button_%1").arg(int(box->standardButton(action))), widgetBounds(action));
+        }
+        state.insert(QStringLiteral("user"), user_);
+        state.insert(QStringLiteral("generation"), generation_);
+        state.insert(QStringLiteral("pid"), QCoreApplication::applicationPid());
+        state.insert(QStringLiteral("ready"), ready_);
+        state.insert(QStringLiteral("entities"), schema_);
+        state.insert(QStringLiteral("draft"), draft_->text());
+        state.insert(QStringLiteral("ui_mode"), mdiMode_ ? QStringLiteral("mdi") : QStringLiteral("single"));
+        state.insert(QStringLiteral("windows"), windows);
+        state.insert(QStringLiteral("active_window_id"), activeId);
+        state.insert(QStringLiteral("last_event"), lastEvent_);
+        state.insert(QStringLiteral("event_sequence"), sequence_);
+        state.insert(QStringLiteral("focus_widget"), QApplication::focusWidget() ? QApplication::focusWidget()->objectName() : QString());
+        state.insert(QStringLiteral("geometry"), geometry);
         QSaveFile file(stateFile_);
         if (!file.open(QIODevice::WriteOnly)) {
             if (!stateErrorReported_) qWarning("Cannot open desktop state file: %s", qPrintable(file.errorString()));
-            stateErrorReported_ = true;
-            return;
+            stateErrorReported_ = true; return;
         }
         file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
         const auto bytes = QJsonDocument(state).toJson(QJsonDocument::Compact);
@@ -1009,58 +1502,32 @@ private:
     const QString user_;
     const QString generation_;
     const QString stateFile_;
+    const bool mdiMode_;
+    QPointer<QScreen> screen_;
+    QMetaObject::Connection screenGeometryConnection_;
     QJsonArray schema_;
-    QJsonObject entity_;
-    QJsonObject original_;
-    QJsonObject baseline_;
-    QHash<QString, QWidget *> editors_;
-    QJsonValue selectedId_;
-    EntityModel *model_{};
+    QList<QPointer<GuardedSubWindow>> windows_;
+    EntityPane *single_{};
+    QMdiArea *mdi_{};
     QListWidget *entities_{};
-    QTableView *grid_{};
-    QLineEdit *filter_{};
     QLineEdit *draft_{};
-    QGroupBox *details_{};
-    QWidget *formBody_{};
-    QFormLayout *formLayout_{};
-    QLabel *entityTitle_{};
-    QLabel *formTitle_{};
-    QLabel *page_{};
-    QLabel *status_{};
+    QLabel *shellStatus_{};
     QPushButton *quit_{};
-    QPushButton *reload_{};
-    QPushButton *new_{};
-    QPushButton *save_{};
-    QPushButton *delete_{};
-    QPushButton *previous_{};
-    QPushButton *next_{};
-    QPushButton *formSave_{};
-    QPushButton *formCancel_{};
+    QPushButton *open_{};
+    QPushButton *tile_{};
+    QPushButton *cascade_{};
+    QPushButton *maximize_{};
+    QPushButton *close_{};
     QPointer<QMessageBox> closePrompt_;
-    QPointer<QMessageBox> deletePrompt_;
-    QPointer<QMessageBox> reconcilePrompt_;
-    int entityIndex_{-1};
-    int offset_{};
-    int total_{};
-    static constexpr int pageSize_ = 25;
-    QString sort_{QStringLiteral("id")};
-    QString appliedFilter_;
-    QString error_;
+    QString shellError_;
     QString lastEvent_;
-    int formGeneration_{};
     int sequence_{};
+    int windowSequence_{};
     bool ready_{};
-    bool loading_{};
-    bool writing_{};
-    bool uncertainWrite_{};
-    bool formOpen_{};
-    bool creating_{};
-    bool dirty_{};
-    bool descending_{};
-    bool buildingForm_{};
-    bool changingSelection_{};
+    bool schemaLoading_{};
     bool allowClose_{};
     bool stateErrorReported_{};
+    bool followingScreen_{};
 };
 
 class SessionLock final {
@@ -1112,5 +1579,7 @@ int main(int argc, char **argv) {
         "QGroupBox::title { subcontrol-origin:margin; left:8px; padding:0 4px; }"));
     DesktopWindow window;
     window.showFullScreen();
+    window.followScreen();
+    QTimer::singleShot(0, &window, [&window] { window.raise(); window.activateWindow(); window.setFocus(); });
     return app.exec();
 }

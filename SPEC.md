@@ -60,3 +60,18 @@ exact decimal strings/scaled integers and version-checked writes apply regardles
 of UI choices. SQLite persists beyond GUI or bank-process restarts. This is a
 single-host topology proof; shared UID, local HTTP and synthetic IdP identities
 are explicit demo constraints. Endpoint details: `docs/interfaces.md`.
+
+# Optional MDI desktop
+
+Retain the single-view mode and add a startup-selected MDI mode. One Qt process
+per user owns a QMdiArea with several independently editable child frames,
+including duplicate views of the same entity. Support tile/cascade, move/resize,
+maximize/restore and guarded child/workspace close. Reconnect retains the live
+frames, unsaved forms and layout. Qualify this mode without Openbox; Xvnc/xcb and
+the clipboard helper remain. Native Qt popups/dialogs require explicit focus and
+stacking checks in that configuration.
+
+The authenticated desktop adapts its framebuffer and Qt root to the available
+browser canvas on connect, browser resize and viewer takeover. Preserve live
+process identity, child frames and unsaved forms. Keep the original renderer
+comparison fixed-size for repeatable results.

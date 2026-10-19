@@ -37,6 +37,37 @@ control of the same process. Quit stops the workspace; starting another requires
 an explicit click. “End session & sign out” stops Qt and removes the app login.
 Identity-provider SSO is separate and may still remember the user.
 
+To use multiple MDI child frames with no external window manager:
+
+```sh
+cmake --build --preset container --target app-up-mdi
+# Equivalent direct command:
+python3.12 tools/app.py up --ui-mode mdi
+```
+
+Select an entity to open or activate its frame. **Open new window** opens an
+independent copy, so several forms for the same entity can remain open with
+different unsaved edits. Use Tile, Cascade, the child title bars, or Maximize
+active/Restore active to arrange them. Ctrl+Tab switches frames, Ctrl+W closes
+the active frame, and Ctrl+N opens another copy. Closing a dirty frame asks before
+discarding; Quit checks every frame. Closing the last child leaves the shell
+running. Reconnecting preserves the frame layout and unsaved forms.
+
+The authenticated desktop resizes to the available browser canvas on connection
+and when the browser window changes size. The Qt root follows that display size;
+the running process and unsaved forms remain. Reconnecting or taking over from a
+different-sized viewer uses the new viewer's dimensions. Normal MDI children keep
+their sizes where possible; use Tile or Maximize active to rearrange them.
+Below an 800×600 canvas, the client scales the existing desktop to keep all
+controls visible; normal remote resizing resumes when more space is available.
+
+The default `app-up` (or `--ui-mode single`) keeps the original single-view UI
+with Openbox. MDI defaults to `--window-manager none`; an explicit
+`--window-manager openbox` overrides that choice. Changing mode recreates the
+stack and ends running workspaces, preserving database records. Both modes still
+use Xvnc, Qt/xcb and vncconfig inside the container; MDI removes Openbox from that
+path. It does not remove internal X11.
+
 ```mermaid
 flowchart LR
   B[Browser canvas] --> N[NGINX :6081]
@@ -87,6 +118,7 @@ Additional fault checks operate on this local demo (run them with idle workspace
 ```sh
 .venv/bin/python tests/linux_ownership.py
 .venv/bin/python tests/browser/uncertain_write.py
+.venv/bin/python tests/browser/uncertain_write.py --ui-mode mdi
 .venv/bin/python tests/startup.py
 ```
 
@@ -94,10 +126,22 @@ They check supervisor/manager death, a committed create with a delayed response,
 and failed startup components. The startup check recreates the whole demo and
 restores a healthy stack. Each check retains results under `artifacts/`.
 
-Verified on native ARM64: 18 service tests, 11 workspace and 5 login browser checks,
+Verified on native ARM64: 24 service/launcher tests, 11 workspace and 5 login browser checks,
 8 Linux ownership checks, uncertain-write reconciliation and all three injected
 application-component startup failures. A fresh OIDC login/canvas check follows
 restoration. These are functional local checks, not production qualification.
+MDI additionally passes 10 frame checks without Openbox; resize checks pass 6/6
+in each UI mode, including small-window scaling and state-preserving takeover.
+
+With the demo running in MDI mode, use
+`cmake --build --preset container --target app-mdi-check` for frame layout,
+independent edits, dialogs/focus, clipboard, reconnect and lifecycle checks.
+Evidence is under `artifacts/mdi-check/`. The MDI uncertain-write fixture also
+checks closing during a read and close/Quit guards during a write; it uses an
+isolated static-identity workspace on port 6083 and cleans up its rows/containers.
+Run `cmake --build --preset container --target app-resize-check` to check initial
+fit, browser resizing with unsaved forms/open dialogs, reconnect and takeover.
+It works in either UI mode; evidence is under `artifacts/resize-{mode}-check/`.
 
 This is a local HTTP demo with a real OIDC protocol flow and synthetic identities.
 Entra tenant integration, external HTTPS, multi-host ownership/failover, native

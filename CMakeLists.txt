@@ -31,6 +31,15 @@ if(SWAG_CONTAINER_ONLY)
             COMMAND "${SWAG_PYTHON}" tools/app.py ${action} --engine "${SWAG_ENGINE}"
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     endforeach()
+    add_custom_target(app-up-mdi
+        COMMAND "${SWAG_PYTHON}" tools/app.py up --engine "${SWAG_ENGINE}" --ui-mode mdi
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-mdi-check
+        COMMAND "${SWAG_TEST_PYTHON}" tests/browser/mdi.py --engine "${SWAG_ENGINE}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-resize-check
+        COMMAND "${SWAG_TEST_PYTHON}" tests/browser/resize.py
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_custom_target(app-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/workspace.py --engine "${SWAG_ENGINE}"
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/login_state.py

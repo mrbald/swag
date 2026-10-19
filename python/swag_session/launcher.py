@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,19 @@ import sys
 import time
 
 from .processes import exclusive_lock, group_alive, parent_death_signal
+
+
+def resolve_desktop_mode(environment: Mapping[str, str]) -> tuple[str, str]:
+    """Choose the desktop layout and its optional external window manager."""
+    ui_mode = environment.get("SWAG_UI_MODE", "single")
+    if ui_mode not in {"single", "mdi"}:
+        raise ValueError("SWAG_UI_MODE must be single or mdi")
+    window_manager = environment.get(
+        "SWAG_WINDOW_MANAGER", "none" if ui_mode == "mdi" else "openbox",
+    )
+    if window_manager not in {"openbox", "none"}:
+        raise ValueError("SWAG_WINDOW_MANAGER must be openbox or none")
+    return ui_mode, window_manager
 
 
 def atomic_json(path: Path, value: object) -> None:
@@ -55,6 +69,8 @@ def reserve_display(runtime: Path) -> tuple[int, int]:
 
 
 def main() -> int:
+    # Reject configuration errors before locks or child processes are created.
+    ui_mode, window_manager = resolve_desktop_mode(os.environ)
     user = os.environ["SWAG_USER"]
     generation = os.environ["SWAG_GENERATION"]
     if not re.fullmatch(r"[A-Za-z0-9]{1,32}", user):
@@ -72,6 +88,7 @@ def main() -> int:
         "user": user, "generation": generation, "ready": False,
         "launcher_pid": os.getpid(), "started_at": time.time(),
         "rfb_socket": str(rfb),
+        "ui_mode": ui_mode, "window_manager": window_manager, "helpers": {},
     }
     children: list[tuple[str, subprocess.Popen[bytes]]] = []
     logs = []
@@ -95,6 +112,7 @@ def main() -> int:
             env=os.environ, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
         )
         children.append((name, child))
+        metadata["helpers"] = {name: child.pid for name, child in children}
         return child
 
     def check_children() -> None:
@@ -124,6 +142,7 @@ def main() -> int:
         os.environ["XDG_RUNTIME_DIR"] = str(launch_runtime)
         os.environ["XDG_CONFIG_HOME"] = str(launch_runtime / "config")
         os.environ["XDG_CACHE_HOME"] = str(launch_runtime / "cache")
+        os.environ["SWAG_UI_MODE"] = ui_mode
         launch("xvnc", [
             "Xvnc", f":{display}", "-geometry", "1280x800", "-depth", "24",
             "-rfbport", "-1", "-rfbunixpath", str(rfb), "-rfbunixmode", "0600",
@@ -132,7 +151,8 @@ def main() -> int:
         ])
         wait_for(lambda: Path(f"/tmp/.X11-unix/X{display}").is_socket() and rfb.is_socket(),
                  "X and private RFB sockets")
-        launch("openbox", ["openbox", "--sm-disable"])
+        if window_manager == "openbox":
+            launch("openbox", ["openbox", "--sm-disable"])
         launch("vncconfig", ["vncconfig", "-nowin"])
         app = launch("qt", ["/opt/swag/bin/swag-desktop"])
         metadata["app_pid"] = app.pid

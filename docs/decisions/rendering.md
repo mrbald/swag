@@ -47,5 +47,7 @@ This decision records functional rendering checks. Later authentication,
 concurrent-user ownership and CRUD/backend checks are summarized in
 [Findings and limits](../findings.md). WAN, throughput and production sizing
 remain unqualified.
+The authenticated desktop later added an MDI mode that omits Openbox and follows
+browser-driven framebuffer resizing; see [Findings and limits](../findings.md).
 Unicode browser key events and clipboard controls are tested; actual keyboard
 layouts, IMEs and CJK font coverage need separate checks if required.

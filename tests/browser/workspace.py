@@ -71,15 +71,23 @@ class Actor:
         self.page.locator("#status").filter(has_text="Connected").wait_for(timeout=20000)
         self.page.locator("#screen canvas").wait_for()
         self.wait(lambda s: s.get("entity") == "portfolios" and len(s.get("items", [])) >= 2)
+        self.wait(lambda s: s.get("framebuffer_size", self.framebuffer_size()) == self.framebuffer_size())
         self.page.wait_for_timeout(350)
+
+    def framebuffer_size(self):
+        return self.page.locator("#screen canvas").evaluate("canvas => [canvas.width, canvas.height]")
+
+    def canvas_point(self, rectangle, fx=.5, fy=.5):
+        x, y, width, height = rectangle
+        canvas = self.page.locator("#screen canvas").bounding_box()
+        remote_width, remote_height = self.framebuffer_size()
+        assert canvas and width > 0 and height > 0 and remote_width > 0 and remote_height > 0
+        return (canvas["x"] + (x + width*fx)*canvas["width"]/remote_width,
+                canvas["y"] + (y + height*fy)*canvas["height"]/remote_height)
 
     def click(self, name):
         state = self.wait(lambda s: name in s.get("geometry", {}))
-        x, y, width, height = state["geometry"][name]
-        canvas = self.page.locator("#screen canvas").bounding_box()
-        assert canvas and width > 0 and height > 0, name
-        self.page.mouse.click(canvas["x"] + (x + width/2)*canvas["width"]/1280,
-                              canvas["y"] + (y + height/2)*canvas["height"]/800)
+        self.page.mouse.click(*self.canvas_point(state["geometry"][name]))
         # A click may need an X11 window-manager focus round trip before typing.
         self.page.wait_for_timeout(160)
 
@@ -241,7 +249,12 @@ print(json.dumps(result))
                     self.command("restart","--time","10","swag-bank")
                     time.sleep(1)
                     alice.click("entity_portfolios")
-                    alice.wait(lambda s: s.get("entity")=="portfolios" and any(r.get("name")==self.saved_name for r in s.get("items",[])))
+                    alice.wait(lambda s: s.get("entity") == "portfolios" and not s.get("loading"))
+                    sequence = alice.state()["event_sequence"]
+                    alice.click("reload_button")
+                    alice.wait(lambda s: s.get("event_sequence", 0) > sequence and not s.get("loading")
+                               and not s.get("error_text") and s.get("entity") == "portfolios"
+                               and any(r.get("name") == self.saved_name for r in s.get("items", [])))
                     return {"shared_edit_survived_service_restart":True}
                 self.check("sqlite_persistence", bank_restart)
 

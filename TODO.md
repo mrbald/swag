@@ -9,5 +9,7 @@
 - [x] Verify browser CRUD/conflicts/reconnect, Linux ownership/death, and uncertain-write reconciliation.
 - [x] Verify failed startup components are rejected and leave the authenticated demo running.
 - [x] Fix cached sign-in pages and expired-tab recovery; cover logout/relogin and stale responses.
+- [x] Add independent MDI child frames and qualify the mode without Openbox.
+- [x] Resize the framebuffer and Qt root to the browser on connect, resize and takeover.
 
 Root maintains this checklist. No separate task system.

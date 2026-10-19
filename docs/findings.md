@@ -13,15 +13,74 @@ wheel input, Unicode keys beyond Latin-1 and both clipboard directions: 9/13
 checks passed. TigerVNC passed 13/13 over TCP and again over a private Unix socket.
 These are findings about the tested package, not all Qt VNC implementations.
 
-The selected path uses Qt/xcb, Xvnc, Openbox and vncconfig inside the container.
+The selected path uses Qt/xcb, Xvnc and vncconfig inside the container. Single-view
+mode also runs Openbox; the optional MDI mode omits it.
 It retains headless X11; no host X server or host X11 socket is required. The
-framebuffer is fixed at 1280x800 and scaled in the browser. Dynamic server-side
-resizing was not qualified. Qt Unix-socket support was not patched or tested.
+renderer comparison/private probe keep their fixed 1280x800 framebuffer.
+The authenticated desktop uses browser-driven resizing as described below.
+Qt Unix-socket support was not patched or tested.
 
 The original probe uses websockify. The authenticated manager instead bridges
 WebSocket binary frames directly to the selected RFB Unix socket. RFB TCP is
 disabled, sockets have mode `0600` and per-user directories have mode `0700`. This
 avoids adding a websockify process to every authenticated workspace.
+
+## MDI without Openbox
+
+`--ui-mode mdi` selects Qt's `QMdiArea`/`QMdiSubWindow` path. Child frames belong
+to one fullscreen Qt root, so moving, resizing, tiling, cascading and switching
+them does not need an external window manager. The mode remains one Qt process
+per user, with independent pane models, filters, form values and network clients.
+Duplicate entity views can retain different unsaved edits. They do not synchronize
+automatically; reload fetches current backend data and stale saves receive 409.
+
+Default Qt MDI placement initially left large children partly outside the fixed
+canvas. New children now use bounded cascade offsets. The area also permits
+scrolling when users move frames beyond the viewport. Pane-wide controls leave
+room for a grid beside the scrollable form, including in four-frame tiles.
+
+Qt already installs the active MDI child's Close shortcut. Adding another
+shell-level Ctrl+W binding caused ambiguous shortcuts and no close action while
+editing. The desktop uses Qt's native action, which enters the same close guard.
+
+Qt message boxes remain native top-level windows even with MDI child parents.
+The desktop explicitly places, raises and focuses them and restores the previous
+focus on dismissal. This matters without Openbox. The tested combo popup and
+application message boxes are the qualified scope; arbitrary file dialogs,
+third-party native windows and integration into the client's existing application
+are untested. The internal X11 dependency remains.
+
+Closing a dirty or uncertain child requires explicit discard. Closing during a
+write is blocked until a result is known. Quit preflights every pane, including
+inactive ones, before closing anything; cancelling leaves every pane open.
+Clean panes can close while reads are pending, cancelling their callbacks. An
+empty MDI shell remains a running workspace. Reconnect retains live frame IDs,
+layout and unsaved state; process exit still ends the whole user's workspace.
+
+## Browser-sized desktop
+
+The initial fixed desktop made renderer comparisons repeatable. Authenticated
+noVNC now enables its `resizeSession` API: on connection and container-size
+changes it requests an Xvnc framebuffer matching the available browser area in
+CSS pixels. Its built-in resize observer and rate limiting handle subsequent
+changes. Local scaling remains enabled during negotiation or if a resize fails.
+This does not change the private renderer comparison.
+
+Qt widgets have minimum layout sizes. When the available canvas is smaller than
+800×600, the client disables remote resizing and scales the existing framebuffer
+in full. This avoids clipping Qt controls outside a too-small server display.
+The check covers shrinking to 800×600/640×480 browser windows, reconnecting while
+small, and resuming remote resizing after expansion. The threshold applies to
+the canvas, excluding browser-page controls.
+
+Without a window manager, Qt fullscreen alone did not establish a screen-resize
+contract. The desktop explicitly follows `QScreen::geometryChanged` and fits its
+root to the current screen, including after reconnect/takeover. Open message boxes
+recenter; the active normal MDI child is kept reachable after a shrink. Other
+normal children retain their layout and may need scrolling or Tile; maximized
+children follow the MDI viewport. Resizing preserves pane forms and the process.
+The active viewer controls display size, consistent with the existing takeover
+policy. This is logical CSS-pixel sizing; HiDPI sharpness is not qualified.
 
 ## Integration lessons and resolved findings
 
@@ -80,11 +139,16 @@ these summaries and the test programs remain available to a fresh checkout.
 | --- | --- | --- |
 | Qt/Tiger TCP comparison | Qt 9/13, Tiger 13/13 | `final-comparison/{qt,tiger}/results.json` |
 | Tiger Unix-socket renderer | 13/13 | `tiger-unix/tiger/results.json` |
-| Bank/session service tests | 18 passed | `unit-tests.log` |
-| Authenticated two-user browser/Qt workflow | 11/11 | `workspace-check/results.json` |
+| Bank/session/launcher service tests | 24 passed | `mdi-unit-tests.log` |
+| Authenticated two-user browser/Qt workflow in MDI mode without Openbox | 11/11 | `workspace-check/results.json` |
+| Single-view compatibility after pane extraction | 11/11 | `mdi-single-workspace-check/results.json` |
+| MDI independent forms, four-frame layout, focus, clipboard, reconnect and lifecycle without Openbox | 10/10 | `mdi-check/results.json` |
+| Browser resize, small-window scaling, dialogs, reconnect and takeover in MDI mode | 6/6 | `resize-mdi-check/results.json` |
+| Same resize workflow in single-view/Openbox mode | 6/6 | `resize-single-check/results.json` |
 | Login cache headers, six logout/relogin cycles, expired-tab recovery, stale responses and history revalidation | 5/5 | `login-state/results.json` |
-| Linux locks, launcher/manager death and restart | 8/8 | `linux-ownership/results.json` |
+| Linux locks, launcher/manager death and restart (single-view) | 8/8 | `linux-ownership/results.json` |
 | Uncertain create response and reconciliation | Passed | `uncertain-write-check/results.json` |
+| MDI close during a read, blocked close/Quit during a write, uncertain-form retention and reconciliation | Passed | `mdi-uncertain-write-check/results.json` |
 | Startup faults | Three rejected components plus healthy restoration | `startup-check/results.json` |
 
 The [renderer harness](../tests/browser/smoke.py) uses browser key events for
@@ -97,6 +161,12 @@ The [uncertain-write fixture](../tests/browser/uncertain_write.py) intentionally
 bypasses OIDC to isolate write handling; authentication is tested in the separate
 workspace checks. [Linux ownership](../tests/linux_ownership.py) and
 [startup](../tests/startup.py) checks deliberately kill demo processes.
+The [MDI harness](../tests/browser/mdi.py) additionally checks full child-frame
+containment/non-overlap and visible grid rows, and types after cancelling a close
+dialog without another mouse click. The tested four-frame tile was also visually
+inspected. Keyboard tests focus the canvas again after browser reload; Qt's
+activation observation can precede the child's raise/focus events, so the harness
+allows those events to settle before interacting.
 The [login checks](../tests/browser/login_state.py) use real OIDC login and inject
 delayed old poll/lease responses during logout. They exercise browser Back and
 the persisted `pageshow` handler; a synthetic event covers that handler when
