@@ -1,0 +1,16 @@
+# Local IDE state and development environment
+/.idea/
+/.venv/
+.DS_Store
+
+# Build output, runtime data, generated credentials and test evidence
+/build/
+/artifacts/
+.env
+.env.*
+!.env.example
+
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/

@@ -1,0 +1,11 @@
+[project]
+name = "swag-probe-tools"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aiohttp>=3.12,<4",
+    "sqlalchemy>=2.0,<3",
+]
+
+[dependency-groups]
+dev = ["playwright==1.58.0"]

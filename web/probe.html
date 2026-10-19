@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>swag rendering probe</title>
+  <style>
+    body { margin: 0; background: #eee; color: #18212c; font: 14px system-ui, sans-serif; }
+    header, footer { padding: 8px 12px; }
+    header { display: flex; gap: 16px; align-items: center; }
+    #screen { width: 1280px; height: 800px; background: #222; }
+    footer { display: flex; gap: 12px; align-items: end; }
+    label { display: flex; flex-direction: column; gap: 4px; }
+    textarea { width: 380px; height: 55px; font: 13px monospace; }
+    button { padding: 6px 12px; }
+    #status { font-weight: 600; }
+    .note { color: #555; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong>swag rendering probe</strong>
+    <span id="status">Connecting</span>
+    <button id="disconnect" type="button">Disconnect viewer</button>
+    <span class="note">Private test frontend — no authentication</span>
+  </header>
+  <main id="screen" aria-label="Remote Qt application"></main>
+  <footer>
+    <label>Send clipboard text to Qt
+      <textarea id="clipboard-input" aria-label="Send clipboard text to Qt"></textarea>
+    </label>
+    <button id="send-clipboard" type="button">Send clipboard</button>
+    <label>Clipboard received from Qt
+      <textarea id="clipboard-output" aria-label="Clipboard received from Qt" readonly></textarea>
+    </label>
+  </footer>
+  <script type="module">
+    import RFB from './core/rfb.js';
+    const status = document.querySelector('#status');
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const rfb = new RFB(document.querySelector('#screen'), `${protocol}//${location.host}/websockify`);
+    rfb.scaleViewport = false;
+    rfb.resizeSession = false;
+    rfb.viewOnly = false;
+    rfb.addEventListener('connect', () => { status.textContent = 'Connected'; });
+    rfb.addEventListener('disconnect', event => {
+      status.textContent = event.detail.clean ? 'Disconnected' : 'Connection lost';
+    });
+    rfb.addEventListener('securityfailure', () => { status.textContent = 'Authentication failed'; });
+    rfb.addEventListener('clipboard', event => {
+      document.querySelector('#clipboard-output').value = event.detail.text;
+    });
+    document.querySelector('#send-clipboard').addEventListener('click', () => {
+      rfb.clipboardPasteFrom(document.querySelector('#clipboard-input').value);
+    });
+    document.querySelector('#disconnect').addEventListener('click', () => { rfb.disconnect(); });
+  </script>
+</body>
+</html>

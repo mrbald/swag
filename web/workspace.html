@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Portfolio workspace</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#e7edf2;color:#183248;font:14px system-ui}
+header{height:58px;background:#142c42;color:white;display:flex;align-items:center;gap:18px;padding:0 22px}
+header strong{font-size:18px}#user{margin-left:auto}button{font:inherit;border:1px solid #b6c7d2;border-radius:4px;padding:7px 14px;cursor:pointer;background:white;color:#183248}button:disabled{opacity:.5;cursor:default}
+#bar{display:flex;align-items:center;gap:12px;padding:12px 22px;background:white;border-bottom:1px solid #c5d1da}#status{flex:1}
+#screen{margin:14px auto;width:calc(100vw - 32px);height:calc(100vh - 144px);background:#263b4b;overflow:hidden;border-radius:4px}
+#clipboard{width:260px;font:inherit;padding:7px;border:1px solid #b6c7d2;border-radius:4px}#empty{color:#dbe6ee;display:grid;place-items:center;height:100%;font-size:18px}
+</style></head>
+<body><header><strong>Portfolio workspace</strong><span>Implementation lab</span><span id="user"></span><button id="signout">End session &amp; sign out</button></header>
+<div id="bar"><span id="status" role="status">Checking session…</span><button id="start" disabled>Start workspace</button><input id="clipboard" aria-label="Clipboard text" placeholder="Clipboard text"><button id="paste">Send clipboard</button></div>
+<main id="screen"><div id="empty">Your workspace will appear here.</div></main>
+<script type="module">
+import RFB from './core/rfb.js';
+let session=null, rfb=null, connectedGeneration=null, stopped=false, busy=false;
+const $=id=>document.getElementById(id);
+function status(text){$('status').textContent=text;}
+function disconnect(){if(rfb){const old=rfb;rfb=null;old.disconnect();}connectedGeneration=null;}
+async function api(method='GET',path='/session',body){
+  const headers={};if(method!=='GET'){headers['X-Swag-CSRF']=session?.csrf_token||'';headers['Content-Type']='application/json';}
+  const response=await fetch(path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),redirect:'error'});
+  if(response.status===401){stopped=true;disconnect();status('Login expired. Sign in again.');$('start').textContent='Sign in';$('start').disabled=false;throw new Error('Login expired');}
+  if(!response.ok)throw new Error(`Request failed (${response.status})`);
+  return response.json();
+}
+function attach(){
+  if(stopped||rfb||session?.state!=='running')return;
+  $('empty')?.remove();connectedGeneration=session.generation;
+  const socket=`${location.protocol==='https:'?'wss':'ws'}://${location.host}/viewer/${encodeURIComponent(session.generation)}/websockify`;
+  const current=rfb=new RFB($('screen'),socket,{shared:true});current.scaleViewport=true;current.resizeSession=false;
+  current.addEventListener('connect',()=>{if(rfb===current){status('Connected');show();}});
+  current.addEventListener('disconnect',()=>{if(rfb===current){rfb=null;status('Viewer disconnected. Rejoin to take control.');$('start').textContent='Rejoin workspace';$('start').disabled=false;}});
+  current.addEventListener('clipboard',event=>{$('clipboard').value=event.detail.text;});
+}
+function show(){
+  $('user').textContent=session.user;
+  if(session.state==='running'){
+    if(!rfb){$('start').textContent='Rejoin workspace';$('start').disabled=false;}
+    else{$('start').textContent='Workspace running';$('start').disabled=true;}
+  }else if(session.state==='starting'){
+    status('Starting workspace…');$('start').disabled=true;
+  }else{
+    disconnect();status(session.state==='ended'?'Workspace ended. Start explicitly to open another.':'Ready to start your workspace.');
+    $('start').textContent='Start workspace';$('start').disabled=false;
+  }
+}
+$('start').onclick=async()=>{
+  if(stopped){location.href='/';return;}if(busy)return;busy=true;$('start').disabled=true;
+  try{session=await api('POST');show();attach();}catch(error){status(error.message);$('start').disabled=false;}finally{busy=false;}
+};
+$('paste').onclick=()=>rfb?.clipboardPasteFrom($('clipboard').value);
+$('signout').onclick=async()=>{
+  if(busy)return;busy=true;
+  try{await api('DELETE');stopped=true;disconnect();location.href='/oauth2/sign_out?rd=/signed-out';}
+  catch(error){status(error.message);busy=false;}
+};
+try{session=await api();show();attach();}catch(error){status(error.message);}
+setInterval(async()=>{
+  if(stopped||busy)return;
+  try{session=await api();show();}catch(error){status(error.message);}
+},3000);
+setInterval(async()=>{
+  if(stopped||!rfb||!connectedGeneration)return;
+  try{await api('POST','/session/lease',{generation:connectedGeneration});}catch(error){disconnect();status(error.message);}
+},10000);
+</script></body></html>

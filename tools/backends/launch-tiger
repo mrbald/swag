@@ -1,0 +1,3 @@
+#!/bin/sh
+export SWAG_BACKEND=tiger
+exec /usr/bin/python3.12 /opt/swag/backends/launch.py "$@"

@@ -1,0 +1,99 @@
+# Native EL8 packages; keep this target reusable while the probe changes.
+FROM docker.io/library/almalinux:8.10@sha256:8b469a3a78515e8a18ea8fc727e6a3679e1d0c5ba6f58d5b30be3d0d9b86cffe AS deps
+
+ARG NOVNC_VERSION=1.7.0
+ARG NOVNC_SHA256=b1003a11b6e6e8d8f7f5e5586daae7f8ca651d8aee0aa155ff9ac841c48f52c6
+ARG WEBSOCKIFY_VERSION=0.13.0
+ARG WEBSOCKIFY_SHA256=ac497a8dafc7f51d28ca989f01cdf5f8add663a497d425a56b159dcb8d6a314c
+
+RUN dnf -y install epel-release dnf-plugins-core \
+    && dnf config-manager --set-enabled powertools \
+    && dnf -y install \
+       gcc-toolset-15-gcc-c++ cmake ninja-build \
+       qt5-qtbase-devel qt5-qtbase-gui \
+       python3.12 python3.12-pip \
+       tigervnc-server-minimal openbox xorg-x11-utils \
+       dejavu-sans-fonts fontconfig procps-ng iproute curl tar \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# The browser client and bridge are fetched only at build time. Verify their
+# release archives; no branch checkout or first-run dependency installation.
+RUN curl --fail --location --silent --show-error \
+        "https://codeload.github.com/novnc/noVNC/tar.gz/refs/tags/v${NOVNC_VERSION}" \
+        --output /tmp/novnc.tar.gz \
+    && echo "${NOVNC_SHA256}  /tmp/novnc.tar.gz" | sha256sum --check - \
+    && mkdir -p /opt/novnc \
+    && tar -xzf /tmp/novnc.tar.gz --strip-components=1 -C /opt/novnc \
+    && printf '%s\n' "${NOVNC_VERSION}" > /opt/novnc/SWAG_VERSION \
+    && printf '%s\n' "${NOVNC_SHA256}" > /opt/novnc/SWAG_SOURCE_SHA256 \
+    && curl --fail --location --silent --show-error \
+        "https://files.pythonhosted.org/packages/19/e8/6476cd85a71f7cfb04ca1e199809b75bc8580d075d4338ffcde4c761d620/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl" \
+        --output "/tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl" \
+    && echo "${WEBSOCKIFY_SHA256}  /tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl" | sha256sum --check - \
+    && python3.12 -m pip install --no-cache-dir --no-deps "/tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl" \
+    && rm /tmp/novnc.tar.gz "/tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl"
+
+RUN groupadd --gid 1000 swag \
+    && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash swag \
+    && mkdir -p /artifacts /run/swag \
+    && chown swag:swag /artifacts /run/swag
+
+ENV PATH="/opt/rh/gcc-toolset-15/root/usr/bin:${PATH}" \
+    LD_LIBRARY_PATH="/opt/rh/gcc-toolset-15/root/usr/lib64:/opt/rh/gcc-toolset-15/root/usr/lib" \
+    LANG=C.UTF-8 \
+    QT_STYLE_OVERRIDE=Fusion \
+    QT_LOGGING_RULES="qt.qpa.*=true" \
+    XDG_RUNTIME_DIR=/run/swag \
+    SWAG_BASE_IMAGE="docker.io/library/almalinux:8.10@sha256:8b469a3a78515e8a18ea8fc727e6a3679e1d0c5ba6f58d5b30be3d0d9b86cffe" \
+    SWAG_BACKEND=qt \
+    SWAG_RFB_TRANSPORT=tcp \
+    SWAG_USER=probe \
+    SWAG_GENERATION=1 \
+    SWAG_STATE_FILE=/artifacts/state.json \
+    SWAG_ARTIFACT_DIR=/artifacts
+
+FROM deps AS probe
+WORKDIR /src
+COPY CMakeLists.txt CMakePresets.json ./
+COPY src/probe ./src/probe
+RUN cmake --preset probe \
+    && cmake --build --preset probe --parallel 2 \
+    && cmake --install build/probe --prefix /opt/swag \
+    && rm -rf /src
+COPY tools/backends /opt/swag/backends
+COPY web/probe.html /opt/novnc/probe.html
+RUN chmod 0755 /opt/swag/backends/*.py /opt/swag/backends/launch-qt /opt/swag/backends/launch-tiger \
+    && chmod 0700 /run/swag \
+    && python3.12 /opt/swag/backends/manifest.py > /opt/swag/image-manifest.json
+USER 1000:1000
+WORKDIR /opt/swag
+EXPOSE 6080
+ENTRYPOINT ["/usr/bin/python3.12", "/opt/swag/backends/launch.py"]
+
+# Shared-account application host and separate bank-service container use the
+# same immutable image, but run separate processes and have separate mounts.
+FROM probe AS app
+USER 0
+COPY containers/requirements.txt /tmp/requirements.txt
+RUN python3.12 -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+WORKDIR /src
+COPY CMakeLists.txt CMakePresets.json ./
+COPY src ./src
+RUN cmake --preset probe \
+    && cmake --build --preset probe --parallel 2 \
+    && cmake --install build/probe --prefix /opt/swag \
+    && rm -rf /src
+COPY python /opt/swag/python
+ENV PYTHONPATH=/opt/swag/python
+USER 1000:1000
+WORKDIR /opt/swag
+ENTRYPOINT ["/usr/bin/python3.12", "-m", "swag_session"]
+
+FROM deps AS edge
+RUN dnf -y install nginx && dnf clean all && rm -rf /var/cache/dnf
+COPY web/workspace.html /opt/novnc/index.html
+COPY web/signed-out.html /opt/novnc/signed-out.html
+EXPOSE 8082
+ENTRYPOINT ["/usr/sbin/nginx", "-g", "daemon off;"]
