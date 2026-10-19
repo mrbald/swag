@@ -29,6 +29,7 @@ avoids adding a websockify process to every authenticated workspace.
 | --- | --- |
 | NGINX generated a login redirect containing internal port 8082 instead of published port 6081. | `absolute_redirect off` preserves relative redirects. Fresh browser OIDC login passes. |
 | Keycloak generated links without its public `/auth` prefix, causing login/resource routing failures. | Both `KC_HOSTNAME` and `KC_HTTP_RELATIVE_PATH` include the public context. OAuth's issuer/login URL is public; token/JWKS/profile requests use private service DNS. |
+| Logout/relogin could leave “Sign in” displayed. Protected HTML lost the intended `no-store` header through NGINX header inheritance, and the client stopped checking after HTTP 401. | Protected locations explicitly retain cache/security headers. Sign-in links start OAuth directly. Valid session checks clear expired state; restored pages reload. A lifecycle revision rejects old poll/lease responses during sign-out or start. Six logout/relogin cycles and expired-tab recovery pass. |
 | Restarting a Podman container changed its IP while NGINX retained the old address, producing HTTP 502 responses. | Variable upstreams and the container-network resolver refresh DNS every 2 s. Fresh browser login passes after host restart; live-session reconnect is tested separately. |
 | Existing Qt clients timed out after the bank container acquired a new address on restart. | The demo gives the bank a stable private address, modeling a shared-service VIP. The browser persistence check restarts the bank and reloads through the existing Qt process. Arbitrary backend IP changes are not qualified. |
 | Startup could report success when only Keycloak was ready. | Startup now requires every container running, bank/manager/OAuth health responses, public discovery and an unauthenticated `/session` returning HTTP 401. Killing each application component during startup is rejected. |
@@ -66,6 +67,9 @@ instead of silently overwriting another user's change.
   independent. Use the advertised `http://localhost:6081` origin: callback and
   CSRF/Origin checks depend on that exact origin. The private rendering probe uses
   `http://127.0.0.1:6080/probe.html` and has no authentication.
+- A tab that observed logout keeps checking and can recover after another tab
+  signs in. Recovery updates its login state without automatically taking viewer
+  control. Deliberate sign-out suppresses recovery until navigation finishes.
 
 ## Verification and evidence
 
@@ -78,6 +82,7 @@ these summaries and the test programs remain available to a fresh checkout.
 | Tiger Unix-socket renderer | 13/13 | `tiger-unix/tiger/results.json` |
 | Bank/session service tests | 18 passed | `unit-tests.log` |
 | Authenticated two-user browser/Qt workflow | 11/11 | `workspace-check/results.json` |
+| Login cache headers, six logout/relogin cycles, expired-tab recovery, stale responses and history revalidation | 5/5 | `login-state/results.json` |
 | Linux locks, launcher/manager death and restart | 8/8 | `linux-ownership/results.json` |
 | Uncertain create response and reconciliation | Passed | `uncertain-write-check/results.json` |
 | Startup faults | Three rejected components plus healthy restoration | `startup-check/results.json` |
@@ -92,6 +97,10 @@ The [uncertain-write fixture](../tests/browser/uncertain_write.py) intentionally
 bypasses OIDC to isolate write handling; authentication is tested in the separate
 workspace checks. [Linux ownership](../tests/linux_ownership.py) and
 [startup](../tests/startup.py) checks deliberately kill demo processes.
+The [login checks](../tests/browser/login_state.py) use real OIDC login and inject
+delayed old poll/lease responses during logout. They exercise browser Back and
+the persisted `pageshow` handler; a synthetic event covers that handler when
+Chrome declines BFCache. This does not qualify actual BFCache admission.
 
 ## Remaining limits
 

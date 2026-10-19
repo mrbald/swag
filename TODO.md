@@ -8,5 +8,6 @@
 - [x] Add the domain model, shared SQLite CRUD backend, and generated Qt grids/forms.
 - [x] Verify browser CRUD/conflicts/reconnect, Linux ownership/death, and uncertain-write reconciliation.
 - [x] Verify failed startup components are rejected and leave the authenticated demo running.
+- [x] Fix cached sign-in pages and expired-tab recovery; cover logout/relogin and stale responses.
 
 Root maintains this checklist. No separate task system.

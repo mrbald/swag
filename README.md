@@ -77,6 +77,11 @@ the persistent DB live under `artifacts/stack/`. `app-down` preserves the DB;
 `app-up` recreates containers and ends existing workspaces. Generated secrets are
 local ignored files under `artifacts/stack/config/`; keep that directory private.
 
+`app-check` also covers logout/relogin, expired-tab recovery and delayed responses
+during sign-out. Run only those login checks (using Bob's workspace) with
+`cmake --build --preset container --target app-login-check`; evidence is under
+`artifacts/login-state/`.
+
 Additional fault checks operate on this local demo (run them with idle workspaces):
 
 ```sh
@@ -89,7 +94,7 @@ They check supervisor/manager death, a committed create with a delayed response,
 and failed startup components. The startup check recreates the whole demo and
 restores a healthy stack. Each check retains results under `artifacts/`.
 
-Verified on native ARM64: 18 service tests, 11 authenticated browser checks,
+Verified on native ARM64: 18 service tests, 11 workspace and 5 login browser checks,
 8 Linux ownership checks, uncertain-write reconciliation and all three injected
 application-component startup failures. A fresh OIDC login/canvas check follows
 restoration. These are functional local checks, not production qualification.

@@ -16,15 +16,24 @@ header strong{font-size:18px}#user{margin-left:auto}button{font:inherit;border:1
 <script type="module">
 import RFB from './core/rfb.js';
 let session=null, rfb=null, connectedGeneration=null, stopped=false, busy=false;
+let signingOut=false, polling=false, revision=0;
 const $=id=>document.getElementById(id);
+const loginURL='/oauth2/start?rd=/';
+class ObsoleteRequest extends Error {}
+class LoginExpired extends Error {}
 function status(text){$('status').textContent=text;}
 function disconnect(){if(rfb){const old=rfb;rfb=null;old.disconnect();}connectedGeneration=null;}
+function report(error){if(!(error instanceof ObsoleteRequest)&&!(error instanceof LoginExpired)&&!signingOut)status(error.message);}
 async function api(method='GET',path='/session',body){
+  const startedAt=revision;
   const headers={};if(method!=='GET'){headers['X-Swag-CSRF']=session?.csrf_token||'';headers['Content-Type']='application/json';}
-  const response=await fetch(path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),redirect:'error'});
-  if(response.status===401){stopped=true;disconnect();status('Login expired. Sign in again.');$('start').textContent='Sign in';$('start').disabled=false;throw new Error('Login expired');}
+  const response=await fetch(path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),redirect:'error',cache:'no-store'});
+  if(startedAt!==revision)throw new ObsoleteRequest();
+  if(response.status===401){stopped=true;disconnect();status('Login expired. Sign in again.');$('start').textContent='Sign in';$('start').disabled=false;throw new LoginExpired();}
   if(!response.ok)throw new Error(`Request failed (${response.status})`);
-  return response.json();
+  const result=await response.json();
+  if(startedAt!==revision)throw new ObsoleteRequest();
+  return result;
 }
 function attach(){
   if(stopped||rfb||session?.state!=='running')return;
@@ -47,23 +56,37 @@ function show(){
     $('start').textContent='Start workspace';$('start').disabled=false;
   }
 }
+function acceptSession(next){
+  const recovered=stopped;
+  const changed=session&&(session.user!==next.user||session.generation!==next.generation);
+  if(changed)disconnect();
+  session=next;stopped=false;show();
+  if((recovered||changed)&&session.state==='running'&&!rfb)status('Workspace running. Rejoin to take control.');
+}
+async function refreshSession(){
+  if(signingOut||busy||polling)return;
+  polling=true;
+  try{acceptSession(await api());}catch(error){report(error);}finally{polling=false;}
+}
 $('start').onclick=async()=>{
-  if(stopped){location.href='/';return;}if(busy)return;busy=true;$('start').disabled=true;
-  try{session=await api('POST');show();attach();}catch(error){status(error.message);$('start').disabled=false;}finally{busy=false;}
+  if(stopped){location.href=loginURL;return;}if(busy||signingOut)return;busy=true;revision++;$('start').disabled=true;
+  try{acceptSession(await api('POST'));attach();}catch(error){report(error);$('start').disabled=false;}finally{busy=false;}
 };
 $('paste').onclick=()=>rfb?.clipboardPasteFrom($('clipboard').value);
 $('signout').onclick=async()=>{
-  if(busy)return;busy=true;
+  if(busy||signingOut)return;busy=true;signingOut=true;revision++;disconnect();status('Signing out…');
   try{await api('DELETE');stopped=true;disconnect();location.href='/oauth2/sign_out?rd=/signed-out';}
-  catch(error){status(error.message);busy=false;}
+  catch(error){signingOut=false;busy=false;report(error);}
 };
-try{session=await api();show();attach();}catch(error){status(error.message);}
+// A page restored from browser history must revalidate its login and CSRF state.
+addEventListener('pageshow',event=>{if(event.persisted)location.reload();});
+addEventListener('focus',()=>{if(stopped)void refreshSession();});
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&stopped)void refreshSession();});
+try{acceptSession(await api());attach();}catch(error){report(error);}
+// Continue checking after a 401: another tab may have completed login meanwhile.
+setInterval(refreshSession,3000);
 setInterval(async()=>{
-  if(stopped||busy)return;
-  try{session=await api();show();}catch(error){status(error.message);}
-},3000);
-setInterval(async()=>{
-  if(stopped||!rfb||!connectedGeneration)return;
-  try{await api('POST','/session/lease',{generation:connectedGeneration});}catch(error){disconnect();status(error.message);}
+  if(stopped||signingOut||!rfb||!connectedGeneration)return;
+  try{await api('POST','/session/lease',{generation:connectedGeneration});}catch(error){if(error instanceof ObsoleteRequest)return;disconnect();report(error);}
 },10000);
 </script></body></html>
