@@ -1,5 +1,7 @@
 # swag
 
+[![license](https://img.shields.io/badge/license-AGPL--3.0%20%7C%20commercial-blue)](LICENSING.md)
+
 Qt 5 / C++23 portfolio-management implementation lab, running on AlmaLinux 8.10
 with GCC Toolset 15 and Python 3.12. The browser displays a server-rendered Qt
 desktop through noVNC and TigerVNC over private Unix sockets.
@@ -212,3 +214,15 @@ Podman. The Docker adapter remains unverified for both the renderer and workspac
 Clipboard checks use the visible noVNC clipboard controls. Unicode checks dispatch
 browser keyboard events for `é€Ж`; native keyboard layouts, IMEs, CJK font coverage,
 and WAN performance require separate qualification.
+
+## License
+
+swag is dual-licensed:
+
+- **Open source:** [GNU AGPL-3.0-only](LICENSE).
+- **Commercial:** a separate license is available for organizations that cannot
+  accept the AGPL terms; see [COMMERCIAL.md](COMMERCIAL.md).
+
+Copyright (C) 2026 swag authors. External contributions require a signed CLA
+preserving commercial-licensing rights. Third-party components retain their own
+licenses; see [LICENSING.md](LICENSING.md).

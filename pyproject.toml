@@ -1,6 +1,8 @@
 [project]
 name = "swag-probe-tools"
 version = "0.1.0"
+license = "AGPL-3.0-only"
+license-files = ["LICENSE", "LICENSING.md", "COMMERCIAL.md"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "aiohttp>=3.12,<4",
