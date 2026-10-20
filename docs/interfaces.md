@@ -74,6 +74,10 @@ follows the current QScreen geometry without replacing the process. The active
 viewer controls dimensions. The private rendering probe remains fixed-size.
 Below an 800×600 browser canvas, remote resizing pauses and local scaling shows
 the whole existing desktop. Remote resizing resumes when both dimensions fit.
+The normal browser toolbar reserves 36px. Browser fullscreen places `#workspace`
+in the Fullscreen API's top layer; its toolbar/panels overlay the canvas and do
+not resize it when shown/hidden. `document.fullscreenElement` is the state source.
+Escape exits locally; no keyboard lock or automatic fullscreen is used.
 
 Private observation JSON: `user`, `generation`, `pid`, `ready`, `entity`, `items`,
 `selected_id`, `dirty`, `error_text`, `draft`, `geometry` (named widgets -> global

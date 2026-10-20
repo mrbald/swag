@@ -37,6 +37,15 @@ control of the same process. Quit stops the workspace; starting another requires
 an explicit click. “End session & sign out” stops Qt and removes the app login.
 Identity-provider SSO is separate and may still remember the user.
 
+The browser uses one compact 36px toolbar. Clipboard transfer is under
+**Clipboard**; **End session & sign out** is under the username button.
+Click **Full screen** for browser fullscreen, like a video player. The application
+then fills the display; the toolbar overlays it and hides when idle. Move over
+the small **Controls** tab at the top to reveal it. **Esc** or **Exit full screen**
+returns to the normal view. Escape exits locally without also cancelling a Qt
+edit. Clipboard use and recovery states keep controls visible. Fullscreen needs
+an explicit click; it is not entered automatically after login.
+
 To use multiple MDI child frames with no external window manager:
 
 ```sh
@@ -52,6 +61,8 @@ active/Restore active to arrange them. Ctrl+Tab switches frames, Ctrl+W closes
 the active frame, and Ctrl+N opens another copy. Closing a dirty frame asks before
 discarding; Quit checks every frame. Closing the last child leaves the shell
 running. Reconnecting preserves the frame layout and unsaved forms.
+The first frame opens maximized; Restore active, Tile and Cascade arrange it
+with any additional frames.
 
 The authenticated desktop resizes to the available browser canvas on connection
 and when the browser window changes size. The Qt root follows that display size;
@@ -142,6 +153,11 @@ isolated static-identity workspace on port 6083 and cleans up its rows/container
 Run `cmake --build --preset container --target app-resize-check` to check initial
 fit, browser resizing with unsaved forms/open dialogs, reconnect and takeover.
 It works in either UI mode; evidence is under `artifacts/resize-{mode}-check/`.
+
+`cmake --build --preset container --target app-presentation-check` checks compact
+geometry, clipboard focus, fullscreen controls, Escape, API rejection/retry and
+workspace recovery. Evidence is under `artifacts/presentation-check/`. Native
+Chrome fullscreen entry and Escape were also checked through the desktop UI.
 
 This is a local HTTP demo with a real OIDC protocol flow and synthetic identities.
 Entra tenant integration, external HTTPS, multi-host ownership/failover, native

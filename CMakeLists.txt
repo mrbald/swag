@@ -40,6 +40,9 @@ if(SWAG_CONTAINER_ONLY)
     add_custom_target(app-resize-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/resize.py
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-presentation-check
+        COMMAND "${SWAG_TEST_PYTHON}" tests/browser/presentation.py
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_custom_target(app-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/workspace.py --engine "${SWAG_ENGINE}"
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/login_state.py

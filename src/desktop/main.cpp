@@ -1037,24 +1037,25 @@ public:
         if (const auto *screen = QGuiApplication::primaryScreen()) setGeometry(screen->geometry());
         auto *body = new QWidget(this);
         auto *layout = new QVBoxLayout(body);
-        layout->setContentsMargins(12, 10, 12, 10);
-        layout->setSpacing(9);
+        layout->setContentsMargins(6, 4, 6, 4);
+        layout->setSpacing(4);
         auto *header = new QHBoxLayout;
-        auto *title = new QLabel(QStringLiteral("SWAG  /  Banking workspace"), body);
-        auto font = title->font(); font.setBold(true); font.setPointSize(14); title->setFont(font);
-        header->addWidget(title);
-        header->addStretch();
-        header->addWidget(new QLabel(QStringLiteral("Signed in: %1").arg(user_), body));
+        header->setSpacing(8);
+        header->addWidget(new QLabel(QStringLiteral("User: %1").arg(user_), body));
+        auto *noteLabel = new QLabel(QStringLiteral("Note"), body);
+        header->addWidget(noteLabel);
+        draft_ = new QLineEdit(body);
+        draft_->setObjectName(QStringLiteral("draft"));
+        draft_->setMinimumWidth(120);
+        draft_->setAccessibleName(QStringLiteral("Unsaved workspace note"));
+        draft_->setPlaceholderText(QStringLiteral("Workspace note"));
+        draft_->setToolTip(QStringLiteral("Unsaved note retained in this running workspace when you reconnect."));
+        noteLabel->setBuddy(draft_);
+        header->addWidget(draft_, 1);
         quit_ = makeButton(QStringLiteral("Quit"), QStringLiteral("quit_button"), body);
+        quit_->setToolTip(QStringLiteral("Quit the application and end this workspace."));
         header->addWidget(quit_);
         layout->addLayout(header);
-        auto *draftRow = new QHBoxLayout;
-        draftRow->addWidget(new QLabel(QStringLiteral("Unsaved workspace note"), body));
-        draft_ = new QLineEdit(QStringLiteral("Draft: café 東京"), body);
-        draft_->setObjectName(QStringLiteral("draft"));
-        draft_->setPlaceholderText(QStringLiteral("This note remains in this running workspace when you reconnect"));
-        draftRow->addWidget(draft_, 1);
-        layout->addLayout(draftRow);
         auto *splitter = new QSplitter(Qt::Horizontal, body);
         auto *navigation = new QWidget(splitter);
         auto *navigationLayout = new QVBoxLayout(navigation);
@@ -1062,6 +1063,9 @@ public:
         entities_ = new QListWidget(navigation);
         entities_->setObjectName(QStringLiteral("entity_list"));
         entities_->setMinimumWidth(160);
+        entities_->setToolTip(mdiMode_
+            ? QStringLiteral("Select an entity to open or activate a frame. Ctrl+Tab switches frames; Ctrl+Shift+Tab switches back. * marks unsaved changes.")
+            : QStringLiteral("Select the entity to view and edit."));
         navigation->setMaximumWidth(205);
         navigationLayout->addWidget(entities_, 1);
         if (mdiMode_) {
@@ -1072,13 +1076,14 @@ public:
             cascade_ = makeButton(QStringLiteral("Cascade"), QStringLiteral("mdi_cascade_button"), navigation);
             maximize_ = makeButton(QStringLiteral("Maximize active"), QStringLiteral("mdi_maximize_button"), navigation);
             close_ = makeButton(QStringLiteral("Close active"), QStringLiteral("mdi_close_button"), navigation);
+            tile_->setToolTip(QStringLiteral("Arrange all frames in tiles."));
+            cascade_->setToolTip(QStringLiteral("Arrange overlapping frames with their title bars visible."));
+            maximize_->setToolTip(QStringLiteral("Maximize or restore the active frame."));
+            close_->setToolTip(QStringLiteral("Close the active frame (Ctrl+W). Unsaved changes require confirmation."));
             navigationLayout->addWidget(tile_);
             navigationLayout->addWidget(cascade_);
             navigationLayout->addWidget(maximize_);
             navigationLayout->addWidget(close_);
-            auto *help = new QLabel(QStringLiteral("Ctrl+Tab: next frame\nCtrl+W: close frame"), navigation);
-            help->setWordWrap(true);
-            navigationLayout->addWidget(help);
             mdi_ = new QMdiArea(splitter);
             mdi_->setObjectName(QStringLiteral("mdi_area"));
             mdi_->setViewMode(QMdiArea::SubWindowView);
@@ -1309,6 +1314,7 @@ private:
     }
     void openPane(int index) {
         if (!mdi_ || index < 0 || index >= schema_.size()) return;
+        const bool firstFrame = mdi_->subWindowList().isEmpty();
         auto *window = new GuardedSubWindow;
         const QString id = QString::number(++windowSequence_);
         window->setObjectName(QStringLiteral("mdi_window_") + id);
@@ -1346,6 +1352,7 @@ private:
         window->move(horizontalSlack ? offset % (horizontalSlack + 1) : 0,
                      verticalSlack ? offset % (verticalSlack + 1) : 0);
         keepFrameVisible(window);
+        if (firstFrame) window->showMaximized();
         mdi_->setActiveSubWindow(window);
         pane->focusGrid();
         record(QStringLiteral("window_opened"));
@@ -1354,6 +1361,7 @@ private:
         if (schemaLoading_) return;
         schemaLoading_ = true;
         shellStatus_->setText(QStringLiteral("Loading schema…"));
+        shellStatus_->show();
         updateShellControls();
         api_.request("GET", QStringLiteral("schema"), {}, {}, [this](ApiResult result) {
             schemaLoading_ = false;
@@ -1369,10 +1377,8 @@ private:
             }
             shellError_.clear();
             shellStatus_->setStyleSheet({});
-            shellStatus_->setText(mdiMode_
-                ? QStringLiteral("Select an entity to open or activate a frame. Open new window creates an independent copy; * marks unsaved changes.")
-                : QString());
-            shellStatus_->setVisible(mdiMode_);
+            shellStatus_->clear();
+            shellStatus_->hide();
             {
                 const QSignalBlocker blocker(entities_);
                 entities_->clear();

@@ -188,6 +188,7 @@ def main():
             actor.page.keyboard.press("Enter")
             actor.wait(lambda s: s.get("dirty"))
             actor.click("form_cancel_button")
+            actor.open_clipboard()
             actor.page.locator("#clipboard").fill("MDI clipboard inbound")
             actor.page.locator("#paste").click()
             actor.click("draft")

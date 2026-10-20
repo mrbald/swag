@@ -67,7 +67,7 @@ def main():
             current_check = "repeated_logout_login"
             original = start()
             for _ in range(6):
-                actor.page.locator("#signout").click()
+                actor.signout()
                 actor.page.wait_for_url(args.origin + "/signed-out")
                 assert actor.context.request.get(args.origin + "/session").status == 401
                 reauthenticate(actor.page)
@@ -122,7 +122,7 @@ def main():
                     break
                 actor.page.wait_for_timeout(500)
             assert "GET" in pending and "lease" in pending, list(pending)
-            actor.page.locator("#signout").click()
+            actor.signout()
             for _ in range(20):
                 if "DELETE" in pending:
                     break
@@ -150,7 +150,7 @@ def main():
             ready(actor.page)
             passed(current_check, history_navigation=True, persisted_event_forces_revalidation=True)
 
-            actor.page.locator("#signout").click()
+            actor.signout()
             actor.page.wait_for_url(args.origin + "/signed-out")
         except Exception as error:
             results.append({"check": current_check, "status": "fail", "error": str(error)})

@@ -75,3 +75,8 @@ The authenticated desktop adapts its framebuffer and Qt root to the available
 browser canvas on connect, browser resize and viewer takeover. Preserve live
 process identity, child frames and unsaved forms. Keep the original renderer
 comparison fixed-size for repeatable results.
+
+Minimize transport-shell overhead with one compact connection bar and on-demand
+clipboard/account controls. Support user-initiated browser fullscreen with
+revealable overlay controls and a reliable Escape exit. Preserve authentication,
+rejoin/explicit-start semantics, clipboard focus and unsaved Qt state.

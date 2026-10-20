@@ -97,6 +97,16 @@ class Actor:
         self.page.wait_for_timeout(60)
         self.page.keyboard.type(value,delay=12)
 
+    def signout(self):
+        if not self.page.locator("#signout").is_visible():
+            self.page.locator("#account-toggle").click()
+        self.page.locator("#signout").click()
+
+    def open_clipboard(self):
+        if not self.page.locator("#clipboard").is_visible():
+            self.page.locator("#clipboard-toggle").click()
+        self.page.locator("#clipboard").wait_for(state="visible")
+
     def screenshot(self, name):
         self.page.wait_for_timeout(200)
         self.page.screenshot(path=str(OUTPUT / f"{name}.png"))
@@ -283,7 +293,7 @@ print(json.dumps(result))
                 self.check("normal_quit", normal_quit)
 
                 def logout():
-                    alice.page.locator("#signout").click()
+                    alice.signout()
                     alice.page.wait_for_url(self.origin+"/signed-out")
                     assert alice.context.request.get(self.origin+"/session").status==401
                     wait_for(lambda: not self.processes())

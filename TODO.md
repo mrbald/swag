@@ -11,5 +11,7 @@
 - [x] Fix cached sign-in pages and expired-tab recovery; cover logout/relogin and stale responses.
 - [x] Add independent MDI child frames and qualify the mode without Openbox.
 - [x] Resize the framebuffer and Qt root to the browser on connect, resize and takeover.
+- [x] Reduce browser/Qt shell overhead and qualify user-controlled browser fullscreen.
+- [ ] Document how to adapt an existing multi-frame Qt application to this setup.
 
 Root maintains this checklist. No separate task system.

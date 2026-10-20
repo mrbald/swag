@@ -82,6 +82,37 @@ children follow the MDI viewport. Resizing preserves pane forms and the process.
 The active viewer controls display size, consistent with the existing takeover
 policy. This is logical CSS-pixel sizing; HiDPI sharpness is not qualified.
 
+## UI/UX space review (2026-10-20)
+
+The review prioritized the remote-desktop conventions of a compact connection
+bar, on-demand transfer/session controls, and video-style browser fullscreen.
+
+| Finding | Change |
+| --- | --- |
+| Two browser bars, permanent clipboard input and wide margins consumed space before the application started. | One 36px bar, no canvas margins; clipboard and session controls open on demand. The redundant disabled “Workspace running” button is hidden once connected. |
+| Qt repeated branding, used a second permanent note row, and kept instructions below the workspace. | One compact user/note/Quit row; shortcuts and frame guidance use tooltips. Loading/errors remain visible. Business grids/forms keep their original controls and target sizes. |
+| A single MDI frame left much of the canvas gray. | The first frame opens maximized. Additional frames remain independent; Restore/Tile/Cascade are explicit controls. |
+| Fullscreen needs an exit and recovery path without wasting permanent space. | Fullscreen uses the browser API, overlays an auto-hiding toolbar and keeps a small Controls tab. Escape exits before the key reaches Qt; disconnected/expired/error states and open panels keep recovery controls visible. |
+
+At a 1440×1040 browser viewport, measured canvas dimensions changed from
+1408×896 to 1440×1004: 108 additional vertical pixels, the full width, and 14.6%
+more canvas area. These measurements exclude browser-owned window decorations.
+Fullscreen reserves no toolbar height; its 88×28 Controls tab overlays the app.
+Revealing controls does not change framebuffer dimensions, so Qt controls do not
+move under the pointer. The RFB connection and Qt process remain mounted.
+
+Fullscreen is requested directly from a click using
+[`requestFullscreen`](https://developer.mozilla.org/en-US/docs/Web/API/Element/requestFullscreen).
+The browser requires user activation and can reject it; rejection leaves the
+workspace usable and retryable. Browser policy or embedding can disable the API.
+No keyboard lock is requested and normal Qt typing shortcuts remain available.
+Escape is reserved for exiting browser fullscreen; use a Qt dialog's Cancel
+button to dismiss it while staying fullscreen. Other browsers remain unqualified.
+Native Chrome was checked separately through the desktop UI: the fullscreen
+button removed the visible address bar/tab strip, Chrome showed its native exit
+notice, and Escape restored browser controls. The test tab was then closed.
+Headless API/layout checks alone are not treated as proof of OS-level fullscreen.
+
 ## Integration lessons and resolved findings
 
 | Finding | Resolution and evidence |
@@ -145,6 +176,8 @@ these summaries and the test programs remain available to a fresh checkout.
 | MDI independent forms, four-frame layout, focus, clipboard, reconnect and lifecycle without Openbox | 10/10 | `mdi-check/results.json` |
 | Browser resize, small-window scaling, dialogs, reconnect and takeover in MDI mode | 6/6 | `resize-mdi-check/results.json` |
 | Same resize workflow in single-view/Openbox mode | 6/6 | `resize-single-check/results.json` |
+| Compact geometry, clipboard focus, fullscreen API/reveal/Escape, rejection/retry and recovery | 7/7 | `presentation-check/results.json` |
+| Native Chrome display fullscreen and Escape | Visually checked through desktop UI | `presentation-check/native-observation.json` |
 | Login cache headers, six logout/relogin cycles, expired-tab recovery, stale responses and history revalidation | 5/5 | `login-state/results.json` |
 | Linux locks, launcher/manager death and restart (single-view) | 8/8 | `linux-ownership/results.json` |
 | Uncertain create response and reconciliation | Passed | `uncertain-write-check/results.json` |

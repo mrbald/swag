@@ -86,7 +86,8 @@ def main():
 
             current = "browser_resize_preserves_forms"
             if mode == "mdi":
-                actor.click("mdi_maximize_button")
+                if not any(w["active"] and w["maximized"] for w in actor.state()["windows"]):
+                    actor.click("mdi_maximize_button")
                 actor.wait(lambda s: any(w["active"] and w["maximized"] for w in s["windows"]))
             measured = []
             for width, height in ((1680, 1100), (1000, 800), (1440, 1040)):
