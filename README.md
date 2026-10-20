@@ -13,6 +13,9 @@ selected TigerVNC path passes the browser interaction/lifecycle checks over a Un
 socket. See [the short decision record](docs/decisions/rendering.md).
 Integration lessons, resolved review findings, evidence and remaining limits are
 collected in [Findings and limits](docs/findings.md).
+For an existing multi-frame application, use the focused
+[Qt application porting guide](docs/integration/README.md): topology, application
+changes, window-manager/MDI choices, and reproduction checks.
 
 ## Authenticated workspace
 
