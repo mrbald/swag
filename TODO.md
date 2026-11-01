@@ -24,4 +24,4 @@ Root maintains this checklist. No separate task system.
 - [x] Integrate the optional Qt WebSocket backend with the original authenticated MDI portfolio app and verify its workflows; retain TigerVNC fallback.
 - [x] Add bounded Qt WebSocket autoresize; verify wire replies and original MDI resize/reconnect/takeover workflows.
 - [x] Add negotiated Unicode clipboard; verify multilingual text, empty clipboard and malformed/bounded payloads.
-- [ ] Measure realistic network/performance profiles through the deployed browser/proxy/session path and record remaining limits.
+- [x] Measure realistic network/performance profiles through the deployed browser/proxy/session path and record remaining limits.

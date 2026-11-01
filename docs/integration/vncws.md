@@ -155,6 +155,55 @@ Browser checks use the viewer's clipboard panel and real Qt copy/paste shortcuts
 Native Windows clipboard permissions, remote-desktop forwarding, installed font
 coverage and IME behavior still need client-side checks.
 
+## Measured network limits
+
+On 2026-11-01, the original authenticated MDI app completed three synthetic
+network profiles without disconnects. A test-only TCP relay between NGINX and
+the session manager added delay and per-connection directional byte-rate caps;
+authentication, viewer leases and the Qt WebSocket relay stayed in the path.
+All connection records drained before byte totals were accepted, and the test
+restored the normal NGINX route afterward.
+
+| Added RTT; download/upload cap | Selection median / p95 | Resize paint |
+| --- | --- | --- |
+| 0 ms; unlimited | 35 / 40 ms | 0.09 s |
+| 50 ms; 20 / 5 Mbps | 917 / 1112 ms | 3.04 s |
+| 100 ms; 5 / 1 Mbps | 3797 / 4270 ms | 11.71 s |
+
+Each profile measured 12 alternating row selections using real noVNC mouse input.
+Timing starts before Playwright's click command and ends when the selected-row
+pixel appears; it includes automation overhead and 20 ms polling. Qt state
+independently confirms the selected record afterward. Resize timing observes
+the new bottom-right pixel after growing the browser from 1440x1040 to 1680x1100.
+These small-sample percentiles describe this workload, not a service guarantee.
+
+Qt RSS after selection was 67–68 MiB; the selection workload used 0.09–0.64 CPU
+seconds across the profiles. Total downstream traffic was 43–48 MiB per profile,
+including connection setup, warmup, selections and resize, plus session/lease
+HTTP and viewer WebSocket overhead. Authentication and static assets are outside
+these byte totals. Raw framebuffer traffic is the clear next optimization target:
+the slower profiles remain functional but are too sluggish for ordinary interactive
+use. Framebuffer compression and bounded update coalescing/pacing should precede
+WAN acceptance. Clipboard zlib does not reduce framebuffer traffic.
+
+This is an application-stream delay/rate model with 16 KiB pacing chunks, not
+packet-loss, congestion, TLS, Windows/RDP or concurrent-user qualification. The
+measured Linux image is ARM64 EL8, Qt Base 5.15.3-9.el8_10, Qt WebSockets
+5.15.3-1.el8 and GCC Toolset 15.2.1. Evidence and exact samples:
+`artifacts/qt-ws-network/results.json`, `environment.txt` and profile screenshots.
+
+```sh
+.venv/bin/python tests/browser/network.py --samples 12 \
+  --output artifacts/qt-ws-network
+```
+
+The harness temporarily reconfigures the local demo and recreates Alice's
+workspace. Run it without concurrent demo users. It restores the original NGINX
+configuration on failure too; if restoration itself fails, it retains the test
+sidecar and reports that failure rather than leaving a route to a removed service.
+
+## Client qualification
+
 The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
 The browser client is understood to be Chrome on a Windows VM, probably in Azure;
 Azure hosting is unconfirmed. This is close to the tested EL8 stack, but the exact
