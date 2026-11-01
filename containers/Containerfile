@@ -78,14 +78,14 @@ RUN dnf -y install qt5-qtbase-private-devel qt5-qtbase-static qt5-qtwebsockets-d
     && dnf clean all && rm -rf /var/cache/dnf
 
 FROM probe-ws-deps AS probe-ws
-WORKDIR /src
-COPY CMakeLists.txt CMakePresets.json ./
-COPY src/probe ./src/probe
-COPY src/plugins/vncws ./src/plugins/vncws
-RUN cmake --preset probe -DSWAG_BUILD_VNCWS=ON \
-    && cmake --build --preset probe --parallel 2 \
-    && cmake --install build/probe --prefix /opt/swag \
-    && rm -rf /src \
+WORKDIR /tmp/client-plugin
+# Deliberately copy only the plugin: exercise the client's source-copy contract.
+COPY src/plugins/vncws ./
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DCMAKE_INSTALL_PREFIX=/opt/swag \
+    && cmake --build build --parallel 2 \
+    && cmake --install build \
+    && rm -rf /tmp/client-plugin \
     && python3.12 /opt/swag/backends/manifest.py > /opt/swag/image-manifest.json
 USER 1000:1000
 WORKDIR /opt/swag
