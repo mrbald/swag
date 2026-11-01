@@ -26,4 +26,4 @@ Root maintains this checklist. No separate task system.
 - [x] Add negotiated Unicode clipboard; verify multilingual text, empty clipboard and malformed/bounded payloads.
 - [x] Measure realistic network/performance profiles through the deployed browser/proxy/session path and record remaining limits.
 - [x] Add negotiated lossless framebuffer compression and bounded update pacing with Raw fallback.
-- [ ] Verify compressed pixels, negotiation/stream lifetime and slow-reader recovery; rerun browser regressions and compare the same WAN profiles.
+- [x] Verify compressed pixels, negotiation/stream lifetime and slow-reader recovery; rerun browser regressions and compare the same WAN profiles.

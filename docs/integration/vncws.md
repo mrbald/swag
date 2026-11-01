@@ -40,11 +40,15 @@ deployment policy.
 
 Current limits: Qt 5.15/Linux raster widgets; one viewer with takeover; one
 resizable screen (64..2048 per dimension, at most 2,073,600 pixels); 32-bit framebuffer;
-RFB 3.3 with little-endian RGB888 in either tested channel order; Raw encoding;
+RFB 3.3 with little-endian RGB888 in either tested channel order; negotiated
+lossless zlib framebuffer encoding with Raw fallback;
 negotiated UTF-8 clipboard with Latin-1 fallback. The RFB handshake deadline is 10 seconds. Input messages/queue
 are capped at 1 MiB, output queue at 16 MiB, encoding hints and distinct held
-keys at 256. Slow viewers exceeding the output cap are disconnected; adaptive
-backpressure/compression remains future work.
+keys at 256. Updates coalesce for about 16 ms and pause above 1 MiB of local
+WebSocket output backlog, resuming below 512 KiB. Compressed updates are staged
+under a 12 MiB cap before sending. The 16 MiB hard output cap still disconnects
+an overflowing viewer; this is bounded local-transport pacing, not adaptive WAN
+congestion control.
 
 ## Verification retained in this repository
 
@@ -155,7 +159,7 @@ Browser checks use the viewer's clipboard panel and real Qt copy/paste shortcuts
 Native Windows clipboard permissions, remote-desktop forwarding, installed font
 coverage and IME behavior still need client-side checks.
 
-## Measured network limits
+## Raw baseline network limits
 
 On 2026-11-01, the original authenticated MDI app completed three synthetic
 network profiles without disconnects. A test-only TCP relay between NGINX and
@@ -183,8 +187,8 @@ including connection setup, warmup, selections and resize, plus session/lease
 HTTP and viewer WebSocket overhead. Authentication and static assets are outside
 these byte totals. Raw framebuffer traffic is the clear next optimization target:
 the slower profiles remain functional but are too sluggish for ordinary interactive
-use. Framebuffer compression and bounded update coalescing/pacing should precede
-WAN acceptance. Clipboard zlib does not reduce framebuffer traffic.
+use. These results motivated the framebuffer compression and bounded pacing
+increment below. Clipboard zlib alone does not reduce framebuffer traffic.
 
 This is an application-stream delay/rate model with 16 KiB pacing chunks, not
 packet-loss, congestion, TLS, Windows/RDP or concurrent-user qualification. The
@@ -197,10 +201,73 @@ measured Linux image is ARM64 EL8, Qt Base 5.15.3-9.el8_10, Qt WebSockets
   --output artifacts/qt-ws-network
 ```
 
+This command measures the currently deployed plugin. The retained Raw baseline
+was recorded at commit `e2e0469` before framebuffer compression was added.
+
 The harness temporarily reconfigures the local demo and recreates Alice's
 workspace. Run it without concurrent demo users. It restores the original NGINX
 configuration on failure too; if restoration itself fails, it retains the test
 sidecar and reports that failure rather than leaving a route to a removed service.
+
+## Framebuffer compression and pacing
+
+The plugin implements the standard [RFB zlib encoding (6)](https://github.com/rfbproto/rfbproto/blob/master/rfbproto.rst#zlib-encoding).
+It chooses the first supported encoding in the viewer's preference list (zlib or
+Raw), defaulting to Raw when neither is requested. One zlib stream lasts for the
+connection, including encoding withdrawal/re-enablement, pixel-format changes and
+resize. Level 1 compression runs on the Qt GUI thread; no additional service or
+dependency is needed beyond the zlib already used for clipboard text.
+
+Independent wire checks decode pixels with Python's zlib and compare against Raw
+for both supported RGB orders and depths. They also verify stream continuity,
+maximum-size resize, fallback, fragmented negotiation and actual TCP slow-reader
+recovery. The latter pauses receiving, submits 20 spaced full-frame requests and
+then resumes: queued requests coalesced, the final requested area arrived and the
+connection remained usable. Runtime logs independently confirm queue deferral and
+resumption. Dirty regions are retained during deferral, with no queued stale frame
+snapshots.
+
+```sh
+.venv/bin/python tests/vncws_compression.py --port 6116 \
+  --output artifacts/qt-ws-compression/protocol
+```
+
+The same three-profile workload was repeated with the identical application
+executable and noVNC client (hashes in `artifacts/qt-ws-compression/image-proof.json`).
+All profiles completed without viewer disconnects or payload-forwarding errors;
+the relay accounted for all closed connections before accepting byte totals.
+
+| Added RTT; download/upload cap | Raw selection median | Zlib selection median / p95 | Raw → zlib resize paint |
+| --- | --- | --- | --- |
+| 0 ms; unlimited | 35 ms | 98 / 103 ms | 0.09 → 0.07 s |
+| 50 ms; 20 / 5 Mbps | 917 ms | 142 / 233 ms | 3.04 → 0.27 s |
+| 100 ms; 5 / 1 Mbps | 3797 ms | 244 / 386 ms | 11.71 → 0.51 s |
+
+Total downstream traffic fell from 43–48 MiB to 0.94–0.96 MiB per profile
+(97.75–98.06% reduction). Qt RSS was 66–67 MiB after selections and their CPU
+cost was 0.11–0.18 seconds. The slower-link improvement is substantial; local
+selection latency increased by about 63 ms with this compressed/paced path.
+Low-RTT tuning remains useful, and these twelve-sample observations do not qualify
+production tail latency, concurrent users or a real Windows/RDP network path.
+
+Verification passed: 14 new compression/pressure wire checks, 26 existing protocol,
+10 resize and 23 clipboard wire checks; 14 probe browser, 10 original MDI,
+8 resize and 5 Unicode browser checks. Both the standalone copied-source build
+and combined C++23 application/C++17 plugin build passed. The MDI checks exposed
+an existing observer race: modal coordinates are published before queued centering.
+The browser harness now waits for stable modal geometry before clicking. A relay
+teardown fix treats only `ENOTCONN` from half-closing an already drained write side
+as harmless; payload failures and other shutdown errors still fail the run.
+
+Accepted evidence: `artifacts/qt-ws-compression/verified-summary.json`,
+`comparison.json`, `network-final/results.json`, `mdi-final/` and the other
+per-suite results. Earlier `mdi/`, `network/` and `network-diagnostic/` retain the
+diagnosed harness failures and are not the accepted qualification runs.
+
+```sh
+.venv/bin/python tests/browser/network.py --samples 12 \
+  --output artifacts/qt-ws-compression/network-final
+```
 
 ## Client qualification
 
