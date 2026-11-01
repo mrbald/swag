@@ -44,6 +44,17 @@ two-user authenticated topology and Unix-socket checks.
 The first runtime gate selected TigerVNC; see `docs/decisions/rendering.md`.
 The unmodified Qt VNC plugin remains an explicit comparison mode, not the default.
 
+## Experimental direct WebSocket probe
+
+Add an opt-in `qt-ws` probe mode: the same Qt Widgets executable with an
+in-process VNC QPA plugin serving RFB over WebSocket, without X11, Xvnc or
+websockify. A separate static HTTP server may serve the unchanged noVNC client.
+Keep a fixed 1280x800 screen and one viewer. The MVP gate is real browser basic
+controls, wheel scrolling and clipboard in both directions, using the existing
+probe checks and retaining screenshots. Record Unicode, popup, reconnect and
+exit behavior too. No authenticated-workspace integration, production claims,
+dynamic resize or performance work in this spike. TigerVNC stays the default.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

@@ -13,11 +13,18 @@ if(SWAG_CONTAINER_ONLY)
     add_custom_target(probe-image
         COMMAND "${SWAG_PYTHON}" tools/probe.py build --engine "${SWAG_ENGINE}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
-    foreach(backend qt tiger)
+    foreach(backend qt tiger qt-ws)
         add_custom_target(probe-${backend}
             COMMAND "${SWAG_PYTHON}" tools/probe.py run --engine "${SWAG_ENGINE}" --backend ${backend}
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     endforeach()
+    add_custom_target(probe-ws-image
+        COMMAND "${SWAG_PYTHON}" tools/probe.py build --engine "${SWAG_ENGINE}" --backend qt-ws
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(probe-ws-check
+        COMMAND "${SWAG_TEST_PYTHON}" tests/browser/smoke.py --engine "${SWAG_ENGINE}" --backend qt-ws
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_dependencies(probe-ws-check probe-ws-image)
     add_custom_target(probe-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/smoke.py --engine "${SWAG_ENGINE}" --backend tiger --transport unix
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
@@ -69,6 +76,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 find_package(Qt5 5.15 REQUIRED COMPONENTS Widgets Network)
+option(SWAG_BUILD_VNCWS "Build the experimental direct-WebSocket VNC QPA plugin" OFF)
+if(SWAG_BUILD_VNCWS)
+    add_subdirectory(src/plugins/vncws)
+endif()
 add_subdirectory(src/probe)
 install(TARGETS swag-probe RUNTIME DESTINATION bin)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/desktop/CMakeLists.txt")

@@ -4,11 +4,49 @@ The private rendering probe runs the same `/opt/swag/bin/swag-probe` in two mode
 | --- | --- | --- |
 | `qt` | `vnc:size=1280x800:port=5900` | none |
 | `tiger` | `xcb`, `DISPLAY=:99` | Xvnc, Openbox, vncconfig |
+| `qt-ws` (experimental) | `vncws:size=1280x800:port=5900` | none; static HTTP file server only |
 
 Both serve the same noVNC release and `probe.html` through Python 3.12 websockify
 on container port 6080. Only publish that port, bound to host loopback. RFB port
 5900 remains inside the container; TigerVNC binds it to container loopback.
 There is no authentication or session manager in this probe.
+
+## Experimental direct WebSocket mode
+
+`qt-ws` uses a separately built QPA plugin in the Qt process. noVNC connects
+directly to its WebSocket listener; Python serves static files only. No X11,
+Xvnc, Openbox, vncconfig or websockify process runs in this mode. The normal
+TigerVNC default and authenticated application are unchanged.
+
+```sh
+python3.12 tools/probe.py build --backend qt-ws
+python3.12 tools/probe.py run --backend qt-ws --name swag-probe-ws --port 6090
+# Open http://127.0.0.1:6090/probe.html?wsPort=6091
+.venv/bin/python tests/browser/smoke.py --backend qt-ws --port 6092
+python3.12 tools/probe.py stop --name swag-probe-ws
+```
+
+The image is `localhost/swag-probe-ws:dev`. The selected host port serves HTTP;
+the next port serves Qt WebSocket/RFB. Both bind to host loopback. The fixed
+screen is 1280x800. This is an unauthenticated local experiment, not a workspace
+backend. Clipboard uses classic RFB Latin-1 text; extended Unicode clipboard,
+IME, dynamic resize and performance qualification are outside this MVP.
+See `src/plugins/vncws/` for source provenance and private Qt API dependencies.
+The CMake equivalents are `probe-ws-image`, `probe-qt-ws`, and `probe-ws-check`.
+
+Verified 2026-11-01 on native ARM64 EL8, Qt 5.15.3 and Chrome: **13/13** browser
+checks passed, including wheel, clipboard both ways (and empty clipboard),
+`é€Ж` keyboard input, grid edits, popups, modal focus, reconnect, normal exit and
+SIGKILL cleanup. Listener/process observations confirmed Qt owns port 5900 and
+only the static HTTP helper runs beside it and the supervisor. The probe
+executable and noVNC hashes match the TigerVNC reference run. Wheel, popup,
+dialog and Unicode screenshots were visually checked; CJK font coverage remains
+outside the gate. Evidence: `artifacts/qt-ws-final/`; reference:
+`artifacts/qt-ws-baseline/`; build logs: `artifacts/qt-ws-build/`.
+This establishes the local MVP only; takeover, slow-client behavior, malformed
+input, IME, WAN performance and authenticated integration are not qualified.
+
+## Original comparison modes
 
 `SWAG_RFB_TRANSPORT=tcp` is the comparison default. The selected TigerVNC path
 also supports `SWAG_RFB_TRANSPORT=unix`: Xvnc disables its RFB TCP listener and

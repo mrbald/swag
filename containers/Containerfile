@@ -71,6 +71,26 @@ WORKDIR /opt/swag
 EXPOSE 6080
 ENTRYPOINT ["/usr/bin/python3.12", "/opt/swag/backends/launch.py"]
 
+# Opt-in probe only: private Qt QPA APIs and WebSockets stay out of normal builds.
+FROM probe AS probe-ws-deps
+USER 0
+RUN dnf -y install qt5-qtbase-private-devel qt5-qtbase-static qt5-qtwebsockets-devel libxkbcommon-devel \
+    && dnf clean all && rm -rf /var/cache/dnf
+
+FROM probe-ws-deps AS probe-ws
+WORKDIR /src
+COPY CMakeLists.txt CMakePresets.json ./
+COPY src/probe ./src/probe
+COPY src/plugins/vncws ./src/plugins/vncws
+RUN cmake --preset probe -DSWAG_BUILD_VNCWS=ON \
+    && cmake --build --preset probe --parallel 2 \
+    && cmake --install build/probe --prefix /opt/swag \
+    && rm -rf /src \
+    && python3.12 /opt/swag/backends/manifest.py > /opt/swag/image-manifest.json
+USER 1000:1000
+WORKDIR /opt/swag
+ENV SWAG_BACKEND=qt-ws SWAG_RFB_TRANSPORT=websocket
+
 # Shared-account application host and separate bank-service container use the
 # same immutable image, but run separate processes and have separate mounts.
 FROM probe AS app

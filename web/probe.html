@@ -38,7 +38,11 @@
     import RFB from './core/rfb.js';
     const status = document.querySelector('#status');
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const rfb = new RFB(document.querySelector('#screen'), `${protocol}//${location.host}/websockify`);
+    const wsPort = new URLSearchParams(location.search).get('wsPort');
+    if (wsPort && (!/^\d+$/.test(wsPort) || Number(wsPort) < 1 || Number(wsPort) > 65535))
+      throw new Error('Invalid WebSocket port');
+    const wsHost = wsPort ? `${location.hostname}:${wsPort}` : location.host;
+    const rfb = new RFB(document.querySelector('#screen'), `${protocol}//${wsHost}/websockify`);
     rfb.scaleViewport = false;
     rfb.resizeSession = false;
     rfb.viewOnly = false;

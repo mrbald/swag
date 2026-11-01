@@ -82,14 +82,16 @@ def stop(process: subprocess.Popen[bytes], signum: int = signal.SIGTERM) -> None
 
 def main() -> int:
     backend = os.environ.get("SWAG_BACKEND", "qt")
-    transport = os.environ.get("SWAG_RFB_TRANSPORT", "tcp")
+    transport = os.environ.get("SWAG_RFB_TRANSPORT", "websocket" if backend == "qt-ws" else "tcp")
     username = os.environ.get("SWAG_USER", "probe")
     generation = os.environ.get("SWAG_GENERATION", "1")
-    if backend not in {"qt", "tiger"}:
-        raise ValueError("SWAG_BACKEND must be qt or tiger")
-    if transport not in {"tcp", "unix"}:
-        raise ValueError("SWAG_RFB_TRANSPORT must be tcp or unix")
-    if backend == "qt" and transport == "unix":
+    if backend not in {"qt", "tiger", "qt-ws"}:
+        raise ValueError("SWAG_BACKEND must be qt, tiger or qt-ws")
+    if transport not in {"tcp", "unix", "websocket"}:
+        raise ValueError("SWAG_RFB_TRANSPORT must be tcp, unix or websocket")
+    if (backend == "qt-ws") != (transport == "websocket"):
+        raise ValueError("qt-ws requires websocket transport, and only qt-ws supports it")
+    if backend in {"qt", "qt-ws"} and transport == "unix":
         raise ValueError("SWAG_BACKEND=qt does not support Unix RFB transport (unpatched Qt plugin)")
     if not re.fullmatch(r"[A-Za-z0-9]{1,32}", username):
         raise ValueError("SWAG_USER must be 1-32 alphanumeric characters")
@@ -182,20 +184,29 @@ def main() -> int:
             helpers.append(("vncconfig", launch("vncconfig", ["vncconfig", "-nowin"])))
         else:
             os.environ.pop("DISPLAY", None)
-            os.environ["QT_QPA_PLATFORM"] = f"vnc:size={GEOMETRY}:port={VNC_PORT}"
+            platform = "vncws" if backend == "qt-ws" else "vnc"
+            os.environ["QT_QPA_PLATFORM"] = f"{platform}:size={GEOMETRY}:port={VNC_PORT}"
+            if backend == "qt-ws":
+                os.environ["QT_PLUGIN_PATH"] = "/opt/swag/plugins"
 
         app = launch("qt", [APP, *sys.argv[1:]])
         metadata["appPid"] = app.pid
         atomic_json(artifacts / "backend.json", metadata)
         wait_for(rfb_ready, "RFB endpoint")
-        target_options = (["--unix-target", str(rfb_socket), f"0.0.0.0:{WEB_PORT}"]
-                          if rfb_socket else
-                          [f"0.0.0.0:{WEB_PORT}", f"127.0.0.1:{VNC_PORT}"])
-        bridge = launch("websockify", [
-            "/usr/bin/python3.12", "-m", "websockify",
-            "--web", "/opt/novnc", *target_options,
-        ])
-        helpers.append(("websockify", bridge))
+        if backend == "qt-ws":
+            helpers.append(("http", launch("http", [
+                "/usr/bin/python3.12", "-m", "http.server", str(WEB_PORT),
+                "--bind", "0.0.0.0", "--directory", "/opt/novnc",
+            ])))
+        else:
+            target_options = (["--unix-target", str(rfb_socket), f"0.0.0.0:{WEB_PORT}"]
+                              if rfb_socket else
+                              [f"0.0.0.0:{WEB_PORT}", f"127.0.0.1:{VNC_PORT}"])
+            bridge = launch("websockify", [
+                "/usr/bin/python3.12", "-m", "websockify",
+                "--web", "/opt/novnc", *target_options,
+            ])
+            helpers.append(("websockify", bridge))
         wait_for(lambda: listening(WEB_PORT), "noVNC HTTP/WebSocket listener")
         metadata.update(ready=True, helpers={name: child.pid for name, child in helpers})
         atomic_json(artifacts / "backend.json", metadata)

@@ -42,6 +42,7 @@ def main() -> None:
             "plugins": str(plugins),
             "vncPluginSha256": digest(plugins / "platforms/libqvnc.so"),
             "xcbPluginSha256": digest(plugins / "platforms/libqxcb.so"),
+            "vncwsPluginSha256": digest(Path("/opt/swag/plugins/platforms/libqvncws.so")),
         },
         "python": platform.python_version(),
         "tigerVnc": run("rpm", "-q", "tigervnc-server-minimal"),

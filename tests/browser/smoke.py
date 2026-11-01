@@ -106,6 +106,7 @@ class Probe:
                      "--transport", self.transport, "--output", str(self.output), timeout=60)
         (self.output / "launch.json").write_text(result.stdout)
         manifest = json.loads(result.stdout)
+        self.url = manifest["url"]
         def ready(state):
             try:
                 backend = json.loads((self.output / "backend.json").read_text())
@@ -118,7 +119,7 @@ class Probe:
     def connect(self, context):
         self.page = context.new_page()
         self.page.on("pageerror", lambda error: (self.output / "browser-errors.log").open("a").write(str(error) + "\n"))
-        self.page.goto(f"http://127.0.0.1:{self.port}/probe.html", wait_until="networkidle")
+        self.page.goto(self.url, wait_until="networkidle")
         self.page.locator("#status").filter(has_text="Connected").wait_for(timeout=15000)
         self.page.locator("#screen canvas").wait_for()
         self.screenshot("initial")
@@ -126,6 +127,18 @@ class Probe:
     def interactions(self):
         def transport():
             backend = json.loads((self.output / "backend.json").read_text())
+            if self.backend == "qt-ws":
+                assert backend["rfbTransport"] == "websocket"
+                assert set(backend["helpers"]) == {"http"}, backend["helpers"]
+                processes = run(self.engine, "exec", self.name, "ps", "-eo", "pid,comm,args").stdout
+                assert not any(name in processes for name in ("Xvnc", "websockify", "vncconfig", "openbox")), processes
+                listeners = run(self.engine, "exec", self.name, "ss", "-ltnp").stdout
+                (self.output / "processes.txt").write_text(processes)
+                (self.output / "listeners.txt").write_text(listeners)
+                assert any(":5900" in line and f'pid={backend["appPid"]},' in line
+                           for line in listeners.splitlines()), listeners
+                return {"transport": "websocket", "qt_owns_listener": True,
+                        "gui_helpers": [], "static_http_helper": True}
             assert backend["rfbTransport"] == self.transport
             if self.transport == "unix":
                 path = backend["rfbEndpoint"]
@@ -209,7 +222,10 @@ class Probe:
             self.click("paste_button")
             self.wait(lambda state: state["editor_text"] == expected)
             self.screenshot("clipboard-in", "text_edit")
-            return {"value": expected}
+            self.page.locator("#clipboard-input").fill("")
+            self.page.locator("#send-clipboard").click()
+            self.wait(lambda state: state["clipboard_text"] == "")
+            return {"value": expected, "empty_clipboard_clears": True}
         self.check("clipboard_browser_to_qt", clipboard_in)
 
         def clipboard_out():
@@ -294,12 +310,15 @@ class Probe:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", default="podman")
-    parser.add_argument("--backend", choices=["qt", "tiger", "both"], default="both")
-    parser.add_argument("--transport", choices=["tcp", "unix"], default="tcp")
+    parser.add_argument("--backend", choices=["qt", "tiger", "qt-ws", "both"], default="both")
+    parser.add_argument("--transport", choices=["tcp", "unix", "websocket"])
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / f"render-{time.strftime('%Y%m%d-%H%M%S')}")
     parser.add_argument("--port", type=int, default=6080)
     parser.add_argument("--browser-channel", default="chrome" if sys.platform == "darwin" else None)
     args = parser.parse_args()
+    args.transport = args.transport or ("websocket" if args.backend == "qt-ws" else "tcp")
+    if (args.backend == "qt-ws") != (args.transport == "websocket"):
+        parser.error("qt-ws requires websocket transport, and only qt-ws supports it")
     if args.transport == "unix" and args.backend != "tiger":
         parser.error("Unix transport is supported by the selected TigerVNC backend only")
     output = args.output.resolve()

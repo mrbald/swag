@@ -15,3 +15,6 @@
 - [x] Document how to adapt an existing multi-frame Qt application to this setup.
 
 Root maintains this checklist. No separate task system.
+
+- [x] Add opt-in in-process Qt WebSocket probe backend and reproducible build.
+- [x] Verify basic controls, wheel and clipboard through noVNC; record evidence and limits.
