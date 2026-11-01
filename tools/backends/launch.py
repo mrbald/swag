@@ -187,7 +187,11 @@ def main() -> int:
             platform = "vncws" if backend == "qt-ws" else "vnc"
             os.environ["QT_QPA_PLATFORM"] = f"{platform}:size={GEOMETRY}:port={VNC_PORT}"
             if backend == "qt-ws":
+                # The published host ports remain loopback-only; Qt listens on
+                # the container interface so Podman's forwarding can reach it.
+                os.environ["QT_QPA_PLATFORM"] += ":addr=0.0.0.0"
                 os.environ["QT_PLUGIN_PATH"] = "/opt/swag/plugins"
+                os.environ["QT_FORCE_STDERR_LOGGING"] = "1"
 
         app = launch("qt", [APP, *sys.argv[1:]])
         metadata["appPid"] = app.pid

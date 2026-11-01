@@ -55,6 +55,8 @@
 #include <qpa/qwindowsysteminterface.h>
 
 #include <QtCore/QRegularExpression>
+#include <QtCore/QSet>
+#include <QtNetwork/QHostAddress>
 
 QT_BEGIN_NAMESPACE
 
@@ -62,16 +64,53 @@ QVncIntegration::QVncIntegration(const QStringList &paramList)
     : m_fontDb(new QGenericUnixFontDatabase),
       m_services(new QGenericUnixServices)
 {
-    QRegularExpression portRx(QLatin1String("port=(\\d+)"));
+    QSize size(1024, 768);
+    QHostAddress address(QHostAddress::LocalHost);
     quint16 port = 5900;
+    QSet<QString> seen;
+    const QRegularExpression sizeRx(QStringLiteral("^([0-9]+)x([0-9]+)$"));
+    const QRegularExpression ipv4Rx(QStringLiteral("^([0-9]{1,3}\\.){3}[0-9]{1,3}$"));
+    const QRegularExpression numberRx(QStringLiteral("^[0-9]+$"));
     for (const QString &arg : paramList) {
-        QRegularExpressionMatch match;
-        if (arg.contains(portRx, &match))
-            port = match.captured(1).toInt();
+        const int separator = arg.indexOf(QLatin1Char('='));
+        if (separator <= 0 || separator == arg.size() - 1 ||
+            arg.indexOf(QLatin1Char('='), separator + 1) >= 0)
+            qFatal("vncws: invalid platform parameter '%s'", qPrintable(arg));
+        const QString key = arg.left(separator);
+        const QString value = arg.mid(separator + 1);
+        if (seen.contains(key))
+            qFatal("vncws: duplicate platform parameter '%s'", qPrintable(key));
+        seen.insert(key);
+        if (key == QLatin1String("size")) {
+            const auto match = sizeRx.match(value);
+            bool widthOk = false, heightOk = false;
+            const int width = match.captured(1).toInt(&widthOk);
+            const int height = match.captured(2).toInt(&heightOk);
+            if (!match.hasMatch() || !widthOk || !heightOk ||
+                width < 64 || width > 2048 || height < 64 || height > 2048 ||
+                qint64(width) * height > 2073600)
+                qFatal("vncws: size must be 64..2048 in each dimension and at most 2073600 pixels");
+            size = QSize(width, height);
+        } else if (key == QLatin1String("depth")) {
+            if (value != QLatin1String("32"))
+                qFatal("vncws: only depth=32 is supported");
+        } else if (key == QLatin1String("port")) {
+            bool valid = false;
+            const uint number = value.toUInt(&valid);
+            if (!numberRx.match(value).hasMatch() || !valid || number == 0 || number > 65535)
+                qFatal("vncws: port must be 1..65535");
+            port = quint16(number);
+        } else if (key == QLatin1String("addr")) {
+            if (!ipv4Rx.match(value).hasMatch() || !address.setAddress(value) ||
+                address.protocol() != QAbstractSocket::IPv4Protocol)
+                qFatal("vncws: addr must be a dotted-decimal IPv4 address");
+        } else {
+            qFatal("vncws: unknown platform parameter '%s'", qPrintable(key));
+        }
     }
 
-    m_primaryScreen = new QVncScreen(paramList);
-    m_server = new QVncServer(m_primaryScreen, port);
+    m_primaryScreen = new QVncScreen(size);
+    m_server = new QVncServer(m_primaryScreen, address, port);
     m_primaryScreen->vncServer = m_server;
 }
 
@@ -86,7 +125,7 @@ void QVncIntegration::initialize()
     if (m_primaryScreen->initialize())
         QWindowSystemInterface::handleScreenAdded(m_primaryScreen);
     else
-        qWarning("vnc: Failed to initialize screen");
+        qFatal("vncws: failed to initialize screen");
 
     m_inputContext = QPlatformInputContextFactory::create();
 

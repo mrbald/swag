@@ -55,6 +55,22 @@ probe checks and retaining screenshots. Record Unicode, popup, reconnect and
 exit behavior too. No authenticated-workspace integration, production claims,
 dynamic resize or performance work in this spike. TigerVNC stays the default.
 
+The next increment makes `src/plugins/vncws/` a self-contained source directory
+that builds with the client's Qt 5.15/private development packages, independently
+of SWAG's toolchain and application. Add explicit listener configuration and
+startup failures, bounded protocol validation, framebuffer clipping and safe
+disconnect/takeover cleanup. Verify with independent wire-level fault probes and
+real noVNC input; retain the existing working demo while checking candidate
+images. Authentication, compression, dynamic resize, Qt 6 and publication remain
+separate increments. Commit verified checkpoints without unrelated user edits.
+
+The final application-level gate is the original MDI portfolio-management
+application with an opt-in Qt WebSocket renderer. Preserve existing identity,
+ownership, generation, lease and takeover controls and the TigerVNC default.
+Exercise real forms/grids, multiple and duplicate frames, dialogs, clipboard,
+reconnection and unsaved edits through the authenticated browser path. The probe
+alone is not evidence of client-application compatibility.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

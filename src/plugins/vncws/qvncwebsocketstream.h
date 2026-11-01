@@ -27,8 +27,10 @@ protected:
     qint64 writeData(const char *data, qint64 maxSize) override;
 
 private:
+    void finishDisconnect();
     QWebSocket *m_socket;
     QByteArray m_input;
+    bool m_closed = false;
 };
 
 QT_END_NAMESPACE

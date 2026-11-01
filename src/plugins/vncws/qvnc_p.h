@@ -45,6 +45,7 @@
 #include <QtCore/QLoggingCategory>
 #include <QtCore/qbytearray.h>
 #include <QtCore/qvarlengtharray.h>
+#include <QtNetwork/QHostAddress>
 #include <qpa/qplatformcursor.h>
 
 QT_BEGIN_NAMESPACE
@@ -126,11 +127,14 @@ public:
 
     int bitsPerPixel;
     int depth;
-    bool bigEndian;
-    bool trueColor;
+    quint8 bigEndian;
+    quint8 trueColor;
     int redBits;
     int greenBits;
     int blueBits;
+    quint16 redMax;
+    quint16 greenMax;
+    quint16 blueMax;
     int redShift;
     int greenShift;
     int blueShift;
@@ -177,6 +181,7 @@ public:
     bool read(QIODevice *s);
 
     char down;
+    quint32 keysym;
     int  keycode;
     int  unicode;
 };
@@ -187,6 +192,7 @@ public:
     bool read(QIODevice *s);
 
     Qt::MouseButtons buttons;
+    quint8 rawButtons;
     quint8 wheelMask;
     quint16 x;
     quint16 y;
@@ -389,7 +395,7 @@ class QVncServer : public QObject
 {
     Q_OBJECT
 public:
-    QVncServer(QVncScreen *screen, quint16 port = 5900);
+    QVncServer(QVncScreen *screen, const QHostAddress &address, quint16 port);
     ~QVncServer();
 
     enum ServerMsg { FramebufferUpdate = 0,
@@ -413,6 +419,7 @@ private:
     QWebSocketServer *serverSocket = nullptr;
     QVector<QVncClient*> clients;
     QVncScreen *qvnc_screen;
+    QHostAddress m_address;
     quint16 m_port;
     bool m_remoteClipboardChange = false;
 };

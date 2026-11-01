@@ -22,6 +22,8 @@ QVncWebSocketStream::QVncWebSocketStream(QWebSocket *socket, QObject *parent)
     open(QIODevice::ReadWrite | QIODevice::Unbuffered);
     connect(m_socket, &QWebSocket::binaryMessageReceived, this,
             [this](const QByteArray &message) {
+        if (m_closed)
+            return;
         if (message.size() > MaxInputBytes - m_input.size()) {
             qWarning("vncws: input queue limit exceeded");
             close();
@@ -33,7 +35,7 @@ QVncWebSocketStream::QVncWebSocketStream(QWebSocket *socket, QObject *parent)
     connect(m_socket, &QWebSocket::textMessageReceived, this,
             [this](const QString &) { close(); });
     connect(m_socket, &QWebSocket::disconnected, this,
-            &QVncWebSocketStream::disconnected);
+            &QVncWebSocketStream::finishDisconnect);
 }
 
 qint64 QVncWebSocketStream::bytesAvailable() const
@@ -43,9 +45,21 @@ qint64 QVncWebSocketStream::bytesAvailable() const
 
 void QVncWebSocketStream::close()
 {
-    if (m_socket)
-        m_socket->close();
+    if (m_closed)
+        return;
+    m_closed = true;
     QIODevice::close();
+    m_socket->abort();
+    emit disconnected();
+}
+
+void QVncWebSocketStream::finishDisconnect()
+{
+    if (m_closed)
+        return;
+    m_closed = true;
+    QIODevice::close();
+    emit disconnected();
 }
 
 qint64 QVncWebSocketStream::readData(char *data, qint64 maxSize)
@@ -60,7 +74,7 @@ qint64 QVncWebSocketStream::readData(char *data, qint64 maxSize)
 
 qint64 QVncWebSocketStream::writeData(const char *data, qint64 maxSize)
 {
-    if (maxSize < 0 || maxSize > MaxOutputBytes ||
+    if (m_closed || maxSize < 0 || maxSize > MaxOutputBytes ||
         m_socket->bytesToWrite() > MaxOutputBytes - maxSize) {
         qWarning("vncws: output queue limit exceeded");
         close();

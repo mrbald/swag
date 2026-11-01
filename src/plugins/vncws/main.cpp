@@ -62,4 +62,3 @@ QPlatformIntegration* QVncIntegrationPlugin::create(const QString& system, const
 QT_END_NAMESPACE
 
 #include "main.moc"
-

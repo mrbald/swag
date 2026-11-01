@@ -41,6 +41,8 @@
 #define QVNCCLIENT_H
 
 #include <QObject>
+#include <QHash>
+#include <QTimer>
 
 #include "qvnc_p.h"
 
@@ -70,7 +72,7 @@ public:
 
     void setDirty(const QRegion &region);
     void setDirtyCursor() { m_dirtyCursor = true; scheduleUpdate(); }
-    QRegion dirtyRegion() const { return m_dirtyRegion; }
+    QRegion dirtyRegion() const { return m_dirtyRegion.intersected(m_requestRect); }
     inline bool isConnected() const { return m_state == Connected; }
     void close();
 
@@ -96,16 +98,19 @@ private:
     enum ClientState {
         Disconnected,
         Protocol,
-        Authentication,
         Init,
         Connected
     };
-    enum ProtocolVersion {
-        V3_3,
-        V3_7,
-        V3_8
+
+    struct HeldKey {
+        int keycode;
+        QString text;
     };
 
+    void releaseInput();
+    void sendEmptyUpdate();
+    void initializePixelFormat(const QRfbPixelFormat &format);
+    bool validPixelFormat(const QRfbPixelFormat &format) const;
     void setPixelFormat();
     void setEncodings();
     void frameBufferUpdateRequest();
@@ -137,13 +142,17 @@ private:
     bool m_wantUpdate;
     Qt::KeyboardModifiers m_keymod;
     Qt::MouseButtons m_buttonState = Qt::NoButton;
+    QPointF m_lastPointerPos;
+    QHash<quint32, HeldKey> m_heldKeys;
+    QTimer m_handshakeTimer;
+    QRect m_requestRect;
+    bool m_discarded = false;
     bool m_dirtyCursor;
     bool m_updatePending;
 #if Q_BYTE_ORDER == Q_BIG_ENDIAN
     bool m_swapBytes;
 #endif
     QRegion m_dirtyRegion;
-    ProtocolVersion m_protocolVersion;
 };
 
 QT_END_NAMESPACE

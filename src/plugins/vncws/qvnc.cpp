@@ -271,22 +271,25 @@ void QRfbRect::write(QIODevice *s) const
 
 void QRfbPixelFormat::read(QIODevice *s)
 {
-    char buf[16];
-    s->read(buf, 16);
+    uchar buf[16];
+    s->read(reinterpret_cast<char *>(buf), sizeof(buf));
     bitsPerPixel = buf[0];
     depth = buf[1];
     bigEndian = buf[2];
     trueColor = buf[3];
 
-    quint16 a = ntohs(*(quint16 *)(buf + 4));
+    redMax = qFromBigEndian<quint16>(buf + 4);
+    greenMax = qFromBigEndian<quint16>(buf + 6);
+    blueMax = qFromBigEndian<quint16>(buf + 8);
+    quint16 a = redMax;
     redBits = 0;
     while (a) { a >>= 1; redBits++; }
 
-    a = ntohs(*(quint16 *)(buf + 6));
+    a = greenMax;
     greenBits = 0;
     while (a) { a >>= 1; greenBits++; }
 
-    a = ntohs(*(quint16 *)(buf + 8));
+    a = blueMax;
     blueBits = 0;
     while (a) { a >>= 1; blueBits++; }
 
@@ -297,7 +300,7 @@ void QRfbPixelFormat::read(QIODevice *s)
 
 void QRfbPixelFormat::write(QIODevice *s)
 {
-    char buf[16];
+    uchar buf[16] = {};
     buf[0] = bitsPerPixel;
     buf[1] = depth;
     buf[2] = bigEndian;
@@ -305,20 +308,20 @@ void QRfbPixelFormat::write(QIODevice *s)
 
     quint16 a = 0;
     for (int i = 0; i < redBits; i++) a = (a << 1) | 1;
-    *(quint16 *)(buf + 4) = htons(a);
+    qToBigEndian<quint16>(a, buf + 4);
 
     a = 0;
     for (int i = 0; i < greenBits; i++) a = (a << 1) | 1;
-    *(quint16 *)(buf + 6) = htons(a);
+    qToBigEndian<quint16>(a, buf + 6);
 
     a = 0;
     for (int i = 0; i < blueBits; i++) a = (a << 1) | 1;
-    *(quint16 *)(buf + 8) = htons(a);
+    qToBigEndian<quint16>(a, buf + 8);
 
     buf[10] = redShift;
     buf[11] = greenShift;
     buf[12] = blueShift;
-    s->write(buf, 16);
+    s->write(reinterpret_cast<const char *>(buf), sizeof(buf));
 }
 
 
@@ -395,6 +398,7 @@ bool QRfbKeyEvent::read(QIODevice *s)
     quint32 key;
     s->read((char *)&key, 4);
     key = ntohl(key);
+    keysym = key;
 
     unicode = 0;
     keycode = 0;
@@ -430,6 +434,7 @@ bool QRfbPointerEvent::read(QIODevice *s)
 
     char buttonMask;
     s->read(&buttonMask, 1);
+    rawButtons = quint8(buttonMask);
     wheelMask = quint8(buttonMask) & 0x78;
     buttons = Qt::NoButton;
     if (buttonMask & 1)
@@ -470,7 +475,9 @@ void QRfbRawEncoder::write()
 
     // create a region from the dirty rects and send the region's merged rects.
     // ### use the tile map again
+    const QImage screenImage = client->server()->screenImage();
     QRegion rgn = client->dirtyRegion();
+    rgn &= QRect(0, 0, screenImage.width(), screenImage.height());
     qCDebug(lcVnc) << "QRfbRawEncoder::write()" << rgn;
 //    if (map) {
 //        for (int y = 0; y < map->mapHeight; ++y) {
@@ -501,8 +508,6 @@ void QRfbRawEncoder::write()
 
     if (rectsInRegion <= 0)
         return;
-
-    const QImage screenImage = client->server()->screenImage();
 
     for (const QRect &tileRect: rgn) {
         const QRfbRect rect(tileRect.x(), tileRect.y(),
@@ -629,8 +634,9 @@ uint QVncClientCursor::removeClient(QVncClient *client)
 }
 #endif // QT_CONFIG(cursor)
 
-QVncServer::QVncServer(QVncScreen *screen, quint16 port)
+QVncServer::QVncServer(QVncScreen *screen, const QHostAddress &address, quint16 port)
     : qvnc_screen(screen)
+    , m_address(address)
     , m_port(port)
 {
     QMetaObject::invokeMethod(this, "init", Qt::QueuedConnection);
@@ -640,10 +646,12 @@ void QVncServer::init()
 {
     serverSocket = new QWebSocketServer(QStringLiteral("SWAG VNCWS"),
                                         QWebSocketServer::NonSecureMode, this);
-    if (!serverSocket->listen(QHostAddress::Any, m_port))
-        qWarning() << "QVncServer could not listen:" << serverSocket->errorString();
-    else
-        qWarning("QVncServer WebSocket created on port %d", m_port);
+    if (!serverSocket->listen(m_address, m_port))
+        qFatal("vncws: cannot listen on %s:%u: %s",
+               qPrintable(m_address.toString()), unsigned(m_port),
+               qPrintable(serverSocket->errorString()));
+    qInfo("vncws: WebSocket listening on %s:%u",
+          qPrintable(m_address.toString()), unsigned(m_port));
 
     connect(serverSocket, &QWebSocketServer::newConnection,
             this, &QVncServer::newConnection);

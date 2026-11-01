@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -120,7 +121,7 @@ class Probe:
         self.page = context.new_page()
         self.page.on("pageerror", lambda error: (self.output / "browser-errors.log").open("a").write(str(error) + "\n"))
         self.page.goto(self.url, wait_until="networkidle")
-        self.page.locator("#status").filter(has_text="Connected").wait_for(timeout=15000)
+        self.page.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for(timeout=15000)
         self.page.locator("#screen canvas").wait_for()
         self.screenshot("initial")
 
@@ -196,6 +197,25 @@ class Probe:
             self.wait(lambda state: state["current_row"] == identity[0] + 1)
             return {"committed": "GridEdited42", "cancel_preserved": True}
         self.check("grid_edit_cancel_navigation", edit_grid)
+
+        def selection_color():
+            self.screenshot("selection-color", "grid_current_cell")
+            rect = self.state()["geometry"]["grid_current_cell"]
+            # Read rendered canvas pixels only. The probe stylesheet specifies
+            # #195fc2; RFB must not exchange the red and blue channels.
+            correct = self.page.locator("#screen canvas").evaluate("""
+                (canvas, rect) => {
+                    const pixels = canvas.getContext('2d').getImageData(...rect).data;
+                    let count = 0;
+                    for (let i = 0; i < pixels.length; i += 4)
+                        if (pixels[i] === 25 && pixels[i+1] === 95 && pixels[i+2] === 194)
+                            count++;
+                    return count;
+                }
+            """, rect)
+            assert correct > 100, f"expected blue selection pixels, found {correct}"
+            return {"selection_rgb": [25, 95, 194], "matching_pixels": correct}
+        self.check("selection_color", selection_color)
 
         def unicode_input():
             self.click("text_edit")
@@ -280,7 +300,7 @@ class Probe:
             self.page.locator("#disconnect").click()
             self.page.wait_for_timeout(250)
             self.page.reload(wait_until="networkidle")
-            self.page.locator("#status").filter(has_text="Connected").wait_for(timeout=10000)
+            self.page.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for(timeout=10000)
             actual = self.state()
             assert (actual["pid"], actual["generation"]) == identity
             assert actual["editor_text"] == "UnsavedReconnect42"

@@ -422,6 +422,8 @@ private:
                                                    : QString()},
             {QStringLiteral("menu_open"), menuOpen_},
             {QStringLiteral("clipboard_text"), QApplication::clipboard()->text()},
+            {QStringLiteral("keyboard_modifiers"), int(QGuiApplication::keyboardModifiers())},
+            {QStringLiteral("mouse_buttons"), int(QGuiApplication::mouseButtons())},
             {QStringLiteral("geometry"), geometry},
             {QStringLiteral("current_row"), grid_->currentIndex().row()},
             {QStringLiteral("current_column"), grid_->currentIndex().column()},

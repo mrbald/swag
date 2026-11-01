@@ -44,17 +44,14 @@
 
 #include <QtGui/QPainter>
 #include <QtGui/QScreen>
-#include <QtCore/QRegularExpression>
 
 
 QT_BEGIN_NAMESPACE
 
 
-QVncScreen::QVncScreen(const QStringList &args)
-    : mArgs(args)
-{
-    initialize();
-}
+QVncScreen::QVncScreen(const QSize &size)
+    : mSize(size)
+{}
 
 QVncScreen::~QVncScreen()
 {
@@ -66,25 +63,10 @@ QVncScreen::~QVncScreen()
 
 bool QVncScreen::initialize()
 {
-    QRegularExpression sizeRx(QLatin1String("size=(\\d+)x(\\d+)"));
-    QRegularExpression mmSizeRx(QLatin1String("mmsize=(?<width>(\\d*\\.)?\\d+)x(?<height>(\\d*\\.)?\\d+)"));
-    QRegularExpression depthRx(QLatin1String("depth=(\\d+)"));
-
-    mGeometry = QRect(0, 0, 1024, 768);
+    mGeometry = QRect(QPoint(0, 0), mSize);
     mFormat = QImage::Format_ARGB32_Premultiplied;
     mDepth = 32;
     mPhysicalSize = QSizeF(mGeometry.width()/96.*25.4, mGeometry.height()/96.*25.4);
-
-    for (const QString &arg : qAsConst(mArgs)) {
-        QRegularExpressionMatch match;
-        if (arg.contains(mmSizeRx, &match)) {
-            mPhysicalSize = QSizeF(match.captured("width").toDouble(), match.captured("height").toDouble());
-        } else if (arg.contains(sizeRx, &match)) {
-            mGeometry.setSize(QSize(match.captured(1).toInt(), match.captured(2).toInt()));
-        } else if (arg.contains(depthRx, &match)) {
-            mDepth = match.captured(1).toInt();
-        }
-    }
 
     QFbScreen::initializeCompositor();
 
@@ -146,9 +128,9 @@ void QVncScreen::disableClientCursor(QVncClient *client)
     if (clientCount == 0) {
         delete clientCursor;
         clientCursor = nullptr;
+        delete mCursor;
+        mCursor = new QFbCursor(this);
     }
-
-    mCursor = new QFbCursor(this);
 #else
     Q_UNUSED(client)
 #endif
@@ -212,4 +194,3 @@ QFbScreen::Flags QVncScreen::flags() const
 }
 
 QT_END_NAMESPACE
-

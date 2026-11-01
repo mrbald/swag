@@ -46,6 +46,16 @@ outside the gate. Evidence: `artifacts/qt-ws-final/`; reference:
 This establishes the local MVP only; takeover, slow-client behavior, malformed
 input, IME, WAN performance and authenticated integration are not qualified.
 
+The subsequent standalone/hardening pass passed 14 startup checks, 26 protocol
+checks, 14 noVNC interaction checks and 3 browser lifecycle checks on the same
+native ARM64 EL8 environment. It also fixes red/blue channel conversion for
+noVNC's RGB pixel order; an independent pixel check verifies the selected-cell
+color. Evidence is under `artifacts/qt-ws-hardening/` (`verified-summary.json`,
+`startup.json`, `final-protocol/`, `final-browser/`, `verified-lifecycle/`).
+See [source-copy integration and checks](../../docs/integration/vncws.md).
+These bounded checks supersede the earlier malformed-input/takeover exclusions;
+they do not establish exhaustive protocol or production qualification.
+
 ## Original comparison modes
 
 `SWAG_RFB_TRANSPORT=tcp` is the comparison default. The selected TigerVNC path

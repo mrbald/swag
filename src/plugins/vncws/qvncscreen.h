@@ -56,7 +56,7 @@ class QVncScreen : public QFbScreen
 {
     Q_OBJECT
 public:
-    QVncScreen(const QStringList &args);
+    explicit QVncScreen(const QSize &size);
     ~QVncScreen();
 
     bool initialize() override;
@@ -78,8 +78,6 @@ public:
     bool swapBytes() const;
 #endif
 
-    QStringList mArgs;
-
     qreal dpiX = 96;
     qreal dpiY = 96;
     QVncDirtyMap *dirty = nullptr;
@@ -89,9 +87,10 @@ public:
 #if QT_CONFIG(cursor)
     QVncClientCursor *clientCursor = nullptr;
 #endif
+private:
+    QSize mSize;
 };
 
 QT_END_NAMESPACE
 
 #endif // QVncScreen_H
-
