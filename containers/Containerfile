@@ -71,7 +71,7 @@ WORKDIR /opt/swag
 EXPOSE 6080
 ENTRYPOINT ["/usr/bin/python3.12", "/opt/swag/backends/launch.py"]
 
-# Opt-in probe only: private Qt QPA APIs and WebSockets stay out of normal builds.
+# Opt-in plugin build: private Qt QPA APIs stay out of normal application builds.
 FROM probe AS probe-ws-deps
 USER 0
 RUN dnf -y install qt5-qtbase-private-devel qt5-qtbase-static qt5-qtwebsockets-devel libxkbcommon-devel \
@@ -110,6 +110,15 @@ ENV PYTHONPATH=/opt/swag/python
 USER 1000:1000
 WORKDIR /opt/swag
 ENTRYPOINT ["/usr/bin/python3.12", "-m", "swag_session"]
+
+# Same desktop executable, with the optional in-process WebSocket platform.
+# Keep the standalone plugin build as the source-copy qualification path.
+FROM app AS app-ws
+USER 0
+RUN dnf -y install qt5-qtwebsockets && dnf clean all && rm -rf /var/cache/dnf
+COPY --from=probe-ws /opt/swag/plugins /opt/swag/plugins
+ENV QT_PLUGIN_PATH=/opt/swag/plugins QT_FORCE_STDERR_LOGGING=1
+USER 1000:1000
 
 FROM deps AS edge
 RUN dnf -y install nginx && dnf clean all && rm -rf /var/cache/dnf

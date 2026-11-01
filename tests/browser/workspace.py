@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import subprocess
 import time
 import uuid
@@ -68,7 +69,7 @@ class Actor:
         return wait_for(lambda: (state if predicate(state := self.state()) else None), timeout)
 
     def connected(self):
-        self.page.locator("#status").filter(has_text="Connected").wait_for(timeout=20000)
+        self.page.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for(timeout=20000)
         self.page.locator("#screen canvas").wait_for()
         self.wait(lambda s: s.get("entity") == "portfolios" and len(s.get("items", [])) >= 2)
         self.wait(lambda s: s.get("framebuffer_size", self.framebuffer_size()) == self.framebuffer_size())
@@ -113,8 +114,9 @@ class Actor:
 
 
 class Suite:
-    def __init__(self, engine, origin):
+    def __init__(self, engine, origin, render_backend="tiger"):
         self.engine, self.origin, self.results = engine, origin, []
+        self.render_backend = render_backend
 
     def command(self, *args, check=True):
         return subprocess.run([self.engine, *args], cwd=ROOT, text=True, capture_output=True, check=check, timeout=45)
@@ -186,7 +188,24 @@ print(json.dumps(result))
                     assert bad_origin.status == 403
                     listeners = self.command("exec","swag-host","ss","-ltn").stdout
                     assert ":5900" not in listeners and ":6000" not in listeners, listeners
-                    return {"spoofed_identity_ignored":True,"csrf":403,"origin":403,"cross_user_generation":404,"rfb_tcp_disabled":True}
+                    endpoints = []
+                    for actor in self.actors:
+                        manifest_path = STACK / "workspaces/users" / actor.user / actor.session["generation"] / "launcher.json"
+                        manifest = json.loads(manifest_path.read_text())
+                        assert manifest["render_backend"] == self.render_backend, manifest
+                        if self.render_backend == "qt-ws":
+                            assert set(manifest["helpers"]) == {"qt"}, manifest
+                            endpoint = f"127.0.0.1:{manifest['ws_port']}"
+                            assert any(endpoint == line.split()[3] for line in listeners.splitlines()[1:]), listeners
+                            assert manifest["app_pid"] == actor.session["pid"]
+                            endpoints.append(endpoint)
+                    if self.render_backend == "qt-ws":
+                        assert len(set(endpoints)) == len(self.actors), endpoints
+                        published = self.command("port", "swag-host").stdout.strip()
+                        assert not published, published
+                    return {"spoofed_identity_ignored":True,"csrf":403,"origin":403,
+                            "cross_user_generation":404,"render_backend":self.render_backend,
+                            "private_loopback_endpoints":endpoints,"public_rfb_port":False}
                 self.check("proxy_and_viewer_boundaries", boundaries)
 
                 def entitlements():
@@ -229,7 +248,7 @@ print(json.dumps(result))
                     assert alice.state()["draft"] == "Alice unsaved note42"
                     # Another authenticated tab takes the viewer, retaining the same Qt process.
                     other = alice.context.new_page(); other.goto(self.origin,wait_until="domcontentloaded")
-                    other.locator("#status").filter(has_text="Connected").wait_for()
+                    other.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for()
                     alice.page.locator("#status").filter(has_text="Viewer disconnected").wait_for()
                     other.close()
                     alice.page.locator("#start").click(); alice.connected()
@@ -314,11 +333,15 @@ print(json.dumps(result))
 
 
 def main():
+    global OUTPUT
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine",default="podman")
     parser.add_argument("--origin",default="http://localhost:6081")
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger")
+    parser.add_argument("--output", type=Path, default=OUTPUT)
     args=parser.parse_args()
-    Suite(args.engine,args.origin).run()
+    OUTPUT = args.output.resolve()
+    Suite(args.engine,args.origin,args.render_backend).run()
 
 
 if __name__=="__main__":

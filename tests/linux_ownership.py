@@ -82,7 +82,8 @@ class Ownership:
     def __init__(self, engine: str):
         self.engine = engine
         self.key = json.loads((STACK / "config" / "secrets.json").read_text())["proxy"]
-        self.origin = json.loads((STACK / "public.json").read_text())["origin"]
+        self.settings = json.loads((STACK / "public.json").read_text())
+        self.origin = self.settings["origin"]
         self.sessions: dict[str, dict] = {}
         self.results: list[dict] = []
         self.started = time.monotonic()
@@ -225,8 +226,14 @@ class Ownership:
         launcher = [p for p in owned if p["module"] == "swag_session.launcher"]
         self.require(len(launcher) == 1, "alice must have one launcher")
         self.require(all(p["uid"] == 1000 for p in owned), "workspace helpers must share UID1000")
-        expected = {"swag-desktop", "Xvnc", "openbox", "vncconfig"}
-        self.require(expected <= {p["name"] for p in owned}, "workspace helper inventory incomplete")
+        expected = {"swag-desktop"}
+        renderer = self.settings.get("render_backend", "tiger")
+        if renderer == "tiger":
+            expected.update({"Xvnc", "vncconfig"})
+            if self.settings.get("window_manager", "openbox") == "openbox":
+                expected.add("openbox")
+        gui_names = {p["name"] for p in owned}.intersection({"swag-desktop", "Xvnc", "openbox", "vncconfig"})
+        self.require(expected == gui_names, "workspace helper inventory disagrees with configured renderer")
         old_identities = {(p["pid"], p["start_ticks"]) for p in owned}
         self.kill(launcher[0]["pid"])
         self.wait(lambda: not old_identities.intersection(
@@ -312,9 +319,12 @@ class Ownership:
 
 
 def main() -> None:
+    global OUTPUT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", default="podman")
+    parser.add_argument("--output", type=Path, default=OUTPUT)
     args = parser.parse_args()
+    OUTPUT = args.output.resolve()
     Ownership(args.engine).run()
 
 

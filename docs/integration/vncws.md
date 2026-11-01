@@ -67,8 +67,56 @@ failure for bad options or an occupied port. Wire checks include fragmented and
 coalesced messages, clipped/empty requests, invalid formats, cursor withdrawal,
 viewer replacement and handshake expiry. This is not a fuzzing/security audit.
 
+## Original authenticated MDI application
+
+The optional application image runs the original `swag-desktop` executable and
+shared bank service through the existing Keycloak/OAuth2 Proxy/NGINX path:
+
+```sh
+python3.12 tools/app.py build --render-backend qt-ws
+python3.12 tools/app.py up --ui-mode mdi --render-backend qt-ws
+.venv/bin/python tests/browser/mdi.py --render-backend qt-ws \
+  --output artifacts/qt-ws-mdi/mdi
+.venv/bin/python tests/browser/workspace.py --render-backend qt-ws \
+  --output artifacts/qt-ws-mdi/workspace
+.venv/bin/python tests/browser/login_state.py
+.venv/bin/python tests/linux_ownership.py --output artifacts/qt-ws-mdi/ownership
+PYTHONPATH=python .venv/bin/python -m unittest tests.test_launcher tests.test_sessions -q
+```
+
+The browser entry point is `http://localhost:6081`, with synthetic logins
+`alice / demo` and `bob / demo`. The `up` command recreates the demo stack and ends
+existing workspaces; bank data persists. To return to TigerVNC, run
+`python3.12 tools/app.py up --ui-mode mdi`.
+
+`SWAG_RENDER_BACKEND=qt-ws` requires MDI mode without an external window manager.
+The launcher reserves a loopback listening socket, passes its descriptor through
+the existing child-process trampoline, and gives Qt `vncws:fd=N`. Qt adopts that
+listener; the parent closes its copy. The descriptor option excludes `addr` and
+`port`, and requires a listening IPv4 TCP socket bound to `127.0.0.1`.
+
+The manager resolves the internal port from the ready manifest matching the
+authenticated user's current generation and launcher/Qt PIDs. The browser cannot
+select a host or port. The manager relays binary WebSocket data to Qt while
+retaining Origin checks, viewer leases and takeover. No viewer port is published
+from the application container. Qt is the only GUI child: no Xvnc, Openbox or
+vncconfig. This remains shared-UID process ownership, not OS isolation between
+users. The new renderer keeps a fixed 1280x800 framebuffer with browser scaling;
+TigerVNC's dynamic remote resize is not available in this mode.
+
+On 2026-11-01 the Qt WebSocket application path passed 10 MDI, 11 two-user
+workspace, 5 login-recovery and 8 Linux-ownership checks, plus 22 focused Python
+unit tests. The expanded plugin startup suite passed 25 checks in both the probe
+and application images, including inherited-FD validation and a real
+WebSocket/RFB greeting after the production exec trampoline and parent close.
+The inherited descriptor has close-on-exec restored inside Qt. Both application
+images contain the identical `swag-desktop` executable; the image's Python files
+match the reviewed sources. Evidence is under `artifacts/qt-ws-mdi/`, including
+`image-proof.json`, screenshots and per-suite results/logs.
+The same 10 MDI checks also passed on the TigerVNC fallback, using that identical
+Qt executable; see `artifacts/qt-ws-mdi/tiger-mdi/`.
+
 The client's exact Qt/OS/architecture and actual application remain unverified.
 Native X11 handles, OpenGL/Qt Quick/WebEngine, IME, dynamic resizing, Unicode
-clipboard and WAN/concurrency envelopes are not qualified. The original MDI
-portfolio application is the next integration gate; the authenticated SWAG
-launcher/manager still use TigerVNC until that integration is implemented.
+clipboard and WAN/concurrency envelopes are not qualified. TigerVNC remains the
+default and fallback renderer.

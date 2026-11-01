@@ -71,6 +71,13 @@ Exercise real forms/grids, multiple and duplicate frames, dialogs, clipboard,
 reconnection and unsaved edits through the authenticated browser path. The probe
 alone is not evidence of client-application compatibility.
 
+For that gate, the launcher reserves a loopback listener and passes its file
+descriptor to Qt. The manager selects the endpoint from trusted current-generation
+metadata and bridges authenticated binary WebSockets. No additional public viewer
+port or plugin-side identity/authentication is introduced. The experimental mode
+requires MDI without an external window manager and keeps a fixed 1280x800 screen;
+the TigerVNC resize qualification does not apply to it.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

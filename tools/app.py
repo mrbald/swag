@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE = ROOT / "artifacts" / "stack"
 CONFIG = STATE / "config"
 APP_IMAGE = "localhost/swag-app:dev"
+APP_WS_IMAGE = "localhost/swag-app-ws:dev"
 EDGE_IMAGE = "localhost/swag-edge:dev"
 KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:26.8.1@sha256:79c623a22abacf3fe6c00a5fb30f5b7843d717b234033b80995891c06116d244"
 OAUTH_IMAGE = "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
@@ -39,9 +40,18 @@ def write(path: Path, contents: str, mode=0o600):
     path.chmod(mode)
 
 
-def configure(port: int, dns: str = "127.0.0.11", ui_mode: str = "single", window_manager: str | None = None):
+def validate_mode(ui_mode: str, window_manager: str | None, render_backend: str):
     if ui_mode not in {"single", "mdi"} or window_manager not in {None, "none", "openbox"}:
         raise ValueError("invalid GUI mode or window manager")
+    if render_backend not in {"tiger", "qt-ws"}:
+        raise ValueError("invalid render backend")
+    if render_backend == "qt-ws" and (ui_mode != "mdi" or window_manager == "openbox"):
+        raise ValueError("qt-ws requires --ui-mode mdi and no external window manager")
+
+
+def configure(port: int, dns: str = "127.0.0.11", ui_mode: str = "single",
+              window_manager: str | None = None, render_backend: str = "tiger"):
+    validate_mode(ui_mode, window_manager, render_backend)
     CONFIG.mkdir(parents=True, exist_ok=True)
     CONFIG.chmod(0o700)
     secret_file = CONFIG / "secrets.json"
@@ -96,6 +106,7 @@ def configure(port: int, dns: str = "127.0.0.11", ui_mode: str = "single", windo
     write(CONFIG / "host.env", f"SWAG_PROXY_KEY={values['proxy']}\nSWAG_PUBLIC_ORIGIN={origin}\n"
           f"SWAG_SERVICE_TOKEN={values['service']}\nSWAG_BACKEND_URL=http://swag-bank:8081\n"
           f"SWAG_UI_MODE={ui_mode}\n"
+          f"SWAG_RENDER_BACKEND={render_backend}\n"
           + (f"SWAG_WINDOW_MANAGER={window_manager}\n" if window_manager else "")
           + "SWAG_VIEWER_LEASE_SECONDS=30\n")
     write(CONFIG / "bank.env", f"SWAG_SERVICE_TOKEN={values['service']}\nSWAG_DB_PATH=/data/bank.sqlite3\n")
@@ -105,7 +116,8 @@ def configure(port: int, dns: str = "127.0.0.11", ui_mode: str = "single", windo
     for directory in ("workspaces", "data"):
         (STATE / directory).mkdir(parents=True, exist_ok=True)
     write(STATE / "public.json", json.dumps({"origin": origin, "users": ["alice", "bob"],
-          "ui_mode": ui_mode, "window_manager": window_manager or ("none" if ui_mode == "mdi" else "openbox")}, indent=2))
+          "ui_mode": ui_mode, "render_backend": render_backend,
+          "window_manager": window_manager or ("none" if ui_mode == "mdi" else "openbox")}, indent=2))
 
 
 def down(engine: str):
@@ -115,8 +127,11 @@ def down(engine: str):
             run(engine, "rm", "-f", "--time", "10", name, capture=True)
 
 
-def build(engine: str):
-    for target, tag in (("app", APP_IMAGE), ("edge", EDGE_IMAGE)):
+def build(engine: str, render_backend: str = "tiger"):
+    targets = [("app", APP_IMAGE), ("edge", EDGE_IMAGE)]
+    if render_backend == "qt-ws":
+        targets.append(("app-ws", APP_WS_IMAGE))
+    for target, tag in targets:
         run(engine, "build", "--target", target, "-f", "containers/Containerfile", "-t", tag, ".")
 
 
@@ -137,7 +152,10 @@ for name,url in (('swag-host','http://127.0.0.1:8080/health'),('swag-bank','http
     return (True, "") if status.returncode == 0 else (False, status.stdout.strip() or "swag-host health probe")
 
 
-def up(engine: str, port: int, ui_mode: str = "single", window_manager: str | None = None):
+def up(engine: str, port: int, ui_mode: str = "single", window_manager: str | None = None,
+       render_backend: str = "tiger"):
+    # Reject incompatible options before stopping an existing working stack.
+    validate_mode(ui_mode, window_manager, render_backend)
     down(engine)
     if run(engine, "network", "inspect", NETWORK, check=False, capture=True).returncode:
         run(engine, "network", "create", "--label", "swag.stack=demo", NETWORK, capture=True)
@@ -147,7 +165,7 @@ def up(engine: str, port: int, ui_mode: str = "single", window_manager: str | No
     # A stable service address models the VIP the real shared backend would have.
     # Qt5 caches DNS; a container restart must not strand existing GUI clients.
     bank_address = str(ipaddress.ip_network(subnet)[100])
-    configure(port, dns, ui_mode, window_manager)
+    configure(port, dns, ui_mode, window_manager, render_backend)
     common = ["run", "-d", "--network", NETWORK, "--label", "swag.stack=demo", "--init"]
     keep_id = ["--userns=keep-id:uid=1000,gid=1000"] if Path(engine).name == "podman" else []
 
@@ -159,7 +177,8 @@ def up(engine: str, port: int, ui_mode: str = "single", window_manager: str | No
            ["start-dev", "--import-realm"])
     launch("swag-bank", APP_IMAGE, [*keep_id, "--ip", bank_address, "--env-file", CONFIG / "bank.env",
            "-v", f"{STATE / 'data'}:/data:Z", "--entrypoint", "/usr/bin/python3.12"], ["-m", "swag_bank"])
-    launch("swag-host", APP_IMAGE, [*keep_id, "--env-file", CONFIG / "host.env",
+    host_image = APP_WS_IMAGE if render_backend == "qt-ws" else APP_IMAGE
+    launch("swag-host", host_image, [*keep_id, "--env-file", CONFIG / "host.env",
            "-v", f"{STATE / 'workspaces'}:/artifacts:Z"])
     launch("swag-oauth", OAUTH_IMAGE, ["-v", f"{CONFIG / 'oauth.cfg'}:/etc/swag/oauth.cfg:ro,Z"],
            ["--config=/etc/swag/oauth.cfg"])
@@ -189,10 +208,11 @@ def up(engine: str, port: int, ui_mode: str = "single", window_manager: str | No
     else:
         raise SystemExit(f"Stack did not become ready: {last_failure}; inspect its container logs")
     images = {}
-    for image in (APP_IMAGE, EDGE_IMAGE, KEYCLOAK_IMAGE, OAUTH_IMAGE):
+    for image in dict.fromkeys((APP_IMAGE, host_image, EDGE_IMAGE, KEYCLOAK_IMAGE, OAUTH_IMAGE)):
         images[image] = json.loads(run(engine, "image", "inspect", image, capture=True).stdout)[0]["Id"]
     write(STATE / "images.json", json.dumps(images, indent=2))
-    print(f"Workspace: {origin}\nGUI mode: {ui_mode}\nSynthetic logins: alice / demo, bob / demo\nState and logs: {STATE}")
+    print(f"Workspace: {origin}\nGUI mode: {ui_mode}\nRenderer: {render_backend}\n"
+          f"Synthetic logins: alice / demo, bob / demo\nState and logs: {STATE}")
 
 
 def main():
@@ -204,11 +224,13 @@ def main():
                         help="GUI mode for newly launched workspaces (up only)")
     parser.add_argument("--window-manager", choices=("none", "openbox"),
                         help="override: single defaults to Openbox, MDI defaults to none")
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger",
+                        help="optional in-process Qt WebSocket renderer; up requires MDI mode")
     args = parser.parse_args()
     if args.action == "build":
-        build(args.engine)
+        build(args.engine, args.render_backend)
     elif args.action == "up":
-        up(args.engine, args.port, args.ui_mode, args.window_manager)
+        up(args.engine, args.port, args.ui_mode, args.window_manager, args.render_backend)
     else:
         down(args.engine)
 

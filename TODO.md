@@ -21,4 +21,4 @@ Root maintains this checklist. No separate task system.
 - [x] Make the plugin directory build/install independently with the client's Qt 5.15.
 - [x] Harden listener configuration, protocol parsing, framebuffer bounds and viewer cleanup.
 - [x] Run standalone build, protocol fault and noVNC regression/lifecycle gates; commit results.
-- [ ] Integrate the optional Qt WebSocket backend with the original authenticated MDI portfolio app and verify its workflows; retain TigerVNC fallback.
+- [x] Integrate the optional Qt WebSocket backend with the original authenticated MDI portfolio app and verify its workflows; retain TigerVNC fallback.

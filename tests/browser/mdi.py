@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 
 from playwright.sync_api import sync_playwright
 
@@ -15,10 +16,14 @@ OUTPUT = ROOT / "artifacts/mdi-check"
 
 
 def main():
+    global OUTPUT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", default="podman")
     parser.add_argument("--origin", default="http://localhost:6081")
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger")
+    parser.add_argument("--output", type=Path, default=OUTPUT)
     args = parser.parse_args()
+    OUTPUT = args.output.resolve()
     OUTPUT.mkdir(parents=True, exist_ok=True)
     workspace.OUTPUT = OUTPUT
     results = []
@@ -78,15 +83,21 @@ def main():
             assert actor.state()["ui_mode"] == "mdi"
             paths = ROOT / "artifacts/stack/workspaces/users/alice" / actor.session["generation"]
             launcher = json.loads((paths / "launcher.json").read_text())
+            assert launcher["render_backend"] == args.render_backend, launcher
             assert launcher["window_manager"] == "none" and launcher["ui_mode"] == "mdi"
             assert "openbox" not in launcher["helpers"]
             processes = suite.command("exec", "swag-host", "ps", "-eo", "comm").stdout.splitlines()
             assert "openbox" not in [s.strip() for s in processes]
+            if args.render_backend == "qt-ws":
+                assert set(launcher["helpers"]) == {"qt"}, launcher
+                assert not {"Xvnc", "vncconfig", "websockify"}.intersection(s.strip() for s in processes)
+                assert actor.framebuffer_size() == [1280, 800]
             owned = suite.processes()["alice"]
             assert len(owned) == 1 and owned[0]["uid"] == 1000 and owned[0]["pid"] == actor.session["pid"]
             assert len(windows()) == 1
             portfolio = active()
-            passed(helpers=list(launcher["helpers"]), one_qt_process=True)
+            passed(helpers=list(launcher["helpers"]), one_qt_process=True,
+                   render_backend=args.render_backend, framebuffer=actor.framebuffer_size())
 
             current = "open_multiple_and_duplicate_entity_frames"
             actor.click("entity_positions")
@@ -205,7 +216,7 @@ def main():
             before = windows()
             identity = (actor.session["pid"], actor.session["generation"])
             actor.page.reload(wait_until="domcontentloaded")
-            actor.page.locator("#status").filter(has_text="Connected").wait_for(timeout=20000)
+            actor.page.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for(timeout=20000)
             actor.session = actor.api()["body"]
             assert identity == (actor.session["pid"], actor.session["generation"])
             assert set(windows()) == set(before)

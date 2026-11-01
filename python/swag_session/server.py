@@ -14,7 +14,7 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
-from aiohttp import WSMsgType, web
+from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMsgType, web
 
 from .processes import exclusive_lock
 
@@ -27,6 +27,7 @@ class Config:
     artifacts: Path = Path("/artifacts")
     backend_url: str = "http://bank:8081"
     service_token: str = ""
+    render_backend: str = "tiger"
     lease_seconds: float = 30.0
     start_timeout: float = 20.0
     launcher_command: tuple[str, ...] = (sys.executable, "-m", "swag_session.launcher")
@@ -39,6 +40,8 @@ class Config:
             raise ValueError("configure a proxy key and exact http(s) browser origin")
         if not 0 < self.lease_seconds <= 3600 or not 0 < self.start_timeout <= 300:
             raise ValueError("invalid session timeout")
+        if self.render_backend not in {"tiger", "qt-ws"}:
+            raise ValueError("render backend must be tiger or qt-ws")
 
     @classmethod
     def from_env(cls) -> Config:
@@ -49,6 +52,7 @@ class Config:
             artifacts=Path(os.environ.get("SWAG_ARTIFACT_DIR", "/artifacts")),
             backend_url=os.environ["SWAG_BACKEND_URL"],
             service_token=os.environ["SWAG_SERVICE_TOKEN"],
+            render_backend=os.environ.get("SWAG_RENDER_BACKEND", "tiger"),
             lease_seconds=float(os.environ.get("SWAG_VIEWER_LEASE_SECONDS", "30")),
             start_timeout=float(os.environ.get("SWAG_START_TIMEOUT_SECONDS", "20")),
         )
@@ -62,15 +66,36 @@ class SessionError(Exception):
 @dataclass(eq=False)
 class Viewer:
     websocket: web.WebSocketResponse
-    writer: asyncio.StreamWriter
     deadline: float
+    writer: asyncio.StreamWriter | None = None
+    upstream: ClientWebSocketResponse | None = None
+    client_session: ClientSession | None = None
+    close_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     async def close(self, code: int = 1001, message: bytes = b"workspace ended") -> None:
-        self.writer.close()
+        if self.close_task is None:
+            self.close_task = asyncio.create_task(self._close(code, message))
+        await asyncio.shield(self.close_task)
+
+    async def _close(self, code: int, message: bytes) -> None:
+        if self.writer is not None:
+            self.writer.close()
         try:
-            await self.websocket.close(code=code, message=message)
-        except (ConnectionError, RuntimeError):
+            await asyncio.wait_for(self.websocket.close(code=code, message=message), 1)
+        except Exception:
             pass
+        finally:
+            try:
+                if self.upstream is not None:
+                    await asyncio.wait_for(self.upstream.close(), 1)
+            except Exception:
+                pass
+            finally:
+                if self.client_session is not None:
+                    try:
+                        await asyncio.wait_for(self.client_session.close(), 1)
+                    except Exception:
+                        pass
 
 
 @dataclass
@@ -116,6 +141,35 @@ class SessionManager:
         return (self.config.runtime / "users" / workspace.user / workspace.generation,
                 self.config.artifacts / "users" / workspace.user / workspace.generation)
 
+    def _validated_endpoint(self, workspace: Workspace,
+                            metadata: object, runtime: Path) -> int | None:
+        """Return 0 for Tiger, a Qt WS port, or None for a stale/invalid manifest."""
+        if not isinstance(metadata, dict):
+            return None
+        process = workspace.process
+        app_pid = metadata.get("app_pid")
+        if (process is None or process.returncode is not None
+                or metadata.get("ready") is not True
+                or metadata.get("user") != workspace.user
+                or metadata.get("generation") != workspace.generation
+                or metadata.get("launcher_pid") != process.pid
+                or metadata.get("render_backend") != self.config.render_backend
+                or type(app_pid) is not int or app_pid <= 0
+                or (workspace.pid is not None and app_pid != workspace.pid)):
+            return None
+        helpers = metadata.get("helpers")
+        if not isinstance(helpers, dict) or helpers.get("qt") != app_pid:
+            return None
+        if self.config.render_backend == "tiger":
+            rfb = runtime / "rfb.sock"
+            if metadata.get("rfb_socket") != str(rfb) or not rfb.is_socket():
+                return None
+            return 0
+        port = metadata.get("ws_port")
+        if type(port) is not int or not 1 <= port <= 65535:
+            return None
+        return port
+
     async def _ended(self, workspace: Workspace) -> None:
         workspace.state = "ended"
         workspace.pid = None
@@ -128,12 +182,12 @@ class SessionManager:
                 and workspace.state != "ended"):
             await self._ended(workspace)
         elif workspace.state == "running":
-            _runtime, artifacts = self.launch_paths(workspace)
+            runtime, artifacts = self.launch_paths(workspace)
             try:
                 metadata = json.loads((artifacts / "launcher.json").read_text())
             except (OSError, ValueError):
                 metadata = {}
-            if metadata.get("ready") is not True:
+            if self._validated_endpoint(workspace, metadata, runtime) is None:
                 await self._ended(workspace)
 
     async def _watch(self, workspace: Workspace, process: asyncio.subprocess.Process) -> None:
@@ -195,6 +249,7 @@ class SessionManager:
                     "SWAG_SERVICE_TOKEN": self.config.service_token,
                     "SWAG_MANAGER_PID": str(os.getpid()),
                     "SWAG_START_TIMEOUT_SECONDS": str(self.config.start_timeout),
+                    "SWAG_RENDER_BACKEND": self.config.render_backend,
                 })
                 with (artifacts / "launcher.log").open("ab", buffering=0) as log:
                     process = await asyncio.create_subprocess_exec(
@@ -210,11 +265,7 @@ class SessionManager:
                         metadata = json.loads((artifacts / "launcher.json").read_text())
                     except (FileNotFoundError, json.JSONDecodeError):
                         metadata = {}
-                    if (metadata.get("ready") is True
-                            and metadata.get("user") == workspace.user
-                            and metadata.get("generation") == workspace.generation
-                            and isinstance(metadata.get("app_pid"), int)
-                            and (runtime / "rfb.sock").is_socket()):
+                    if self._validated_endpoint(workspace, metadata, runtime) is not None:
                         workspace.pid = metadata["app_pid"]
                         workspace.state = "running"
                         workspace.monitor = asyncio.create_task(self._watch(workspace, process))
@@ -248,47 +299,91 @@ class SessionManager:
 
     async def viewer(self, request: web.Request, workspace: Workspace) -> web.WebSocketResponse:
         generation = request.match_info["generation"]
-        reader: asyncio.StreamReader
+        reader: asyncio.StreamReader | None = None
+        writer: asyncio.StreamWriter | None = None
+        upstream: ClientWebSocketResponse | None = None
+        client_session: ClientSession | None = None
         async with workspace.lock:
             await self._refresh(workspace)
             if (workspace.state != "running" or workspace.generation != generation
                     or workspace.process is None or workspace.process.returncode is not None):
                 raise SessionError(404, "workspace_unavailable", "no live workspace for this generation")
-            runtime, _artifacts = self.launch_paths(workspace)
+            runtime, artifacts = self.launch_paths(workspace)
             try:
-                reader, writer = await asyncio.wait_for(
-                    asyncio.open_unix_connection(str(runtime / "rfb.sock"), limit=65536), 3,
-                )
-            except (OSError, TimeoutError) as error:
-                raise SessionError(503, "viewer_unavailable", "workspace display is unavailable") from error
+                metadata = json.loads((artifacts / "launcher.json").read_text())
+            except (OSError, ValueError):
+                metadata = {}
+            port = self._validated_endpoint(workspace, metadata, runtime)
+            if port is None:
+                raise SessionError(404, "workspace_unavailable", "no live workspace for this generation")
+            try:
+                if port == 0:
+                    reader, writer = await asyncio.wait_for(
+                        asyncio.open_unix_connection(str(runtime / "rfb.sock"), limit=65536), 3,
+                    )
+                else:
+                    client_session = ClientSession()
+                    upstream = await asyncio.wait_for(
+                        client_session.ws_connect(f"ws://127.0.0.1:{port}/",
+                                                  max_msg_size=16 * 1024 * 1024,
+                                                  compress=0, heartbeat=10), 3,
+                    )
+            except BaseException as error:
+                if client_session is not None:
+                    await asyncio.shield(client_session.close())
+                if isinstance(error, asyncio.CancelledError):
+                    raise
+                if isinstance(error, (OSError, TimeoutError, ClientError)):
+                    raise SessionError(503, "viewer_unavailable",
+                                       "workspace display is unavailable") from error
+                raise
             websocket = web.WebSocketResponse(
                 protocols=("binary",), max_msg_size=262144, heartbeat=10, compress=False,
                 timeout=1, writer_limit=65536,
             )
+            viewer = Viewer(websocket, time.monotonic() + self.config.lease_seconds,
+                            writer=writer, upstream=upstream, client_session=client_session)
             try:
                 await websocket.prepare(request)
             except BaseException:
-                writer.close()
+                await viewer.close()
                 raise
-            viewer = Viewer(websocket, writer, time.monotonic() + self.config.lease_seconds)
             previous, workspace.viewer = workspace.viewer, viewer
         if previous is not None:
             await previous.close(1008, b"viewer taken over")
 
-        async def browser_to_rfb() -> None:
+        async def browser_to_renderer() -> None:
             async for message in websocket:
                 if message.type == WSMsgType.BINARY:
-                    writer.write(message.data)
-                    await writer.drain()
+                    if upstream is not None:
+                        await upstream.send_bytes(message.data)
+                    else:
+                        assert writer is not None
+                        writer.write(message.data)
+                        await writer.drain()
                 elif message.type == WSMsgType.TEXT:
                     await viewer.close(1003, b"binary RFB frames required")
                     break
                 elif message.type == WSMsgType.ERROR:
                     break
 
-        async def rfb_to_browser() -> None:
-            while data := await reader.read(65536):
-                await websocket.send_bytes(data)
+        async def renderer_to_browser() -> None:
+            if upstream is not None:
+                async for message in upstream:
+                    if message.type == WSMsgType.BINARY:
+                        # noVNC consumes an RFB stream; frame boundaries are immaterial.
+                        data = memoryview(message.data)
+                        for offset in range(0, len(data), 65536):
+                            await websocket.send_bytes(data[offset:offset + 65536])
+                    elif message.type == WSMsgType.TEXT:
+                        await viewer.close(1003, b"binary RFB frames required")
+                        break
+                    elif message.type == WSMsgType.ERROR:
+                        break
+            else:
+                assert reader is not None
+                while data := await reader.read(65536):
+                    await websocket.send_bytes(data)
 
         async def lease() -> None:
             while True:
@@ -298,7 +393,8 @@ class SessionManager:
                     return
                 await asyncio.sleep(min(remaining, 1.0))
 
-        tasks = [asyncio.create_task(job()) for job in (browser_to_rfb, rfb_to_browser, lease)]
+        tasks = [asyncio.create_task(job()) for job in
+                 (browser_to_renderer, renderer_to_browser, lease)]
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
@@ -306,10 +402,11 @@ class SessionManager:
                 task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             await viewer.close()
-            try:
-                await writer.wait_closed()
-            except OSError:
-                pass
+            if writer is not None:
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
             async with workspace.lock:
                 if workspace.viewer is viewer:
                     workspace.viewer = None

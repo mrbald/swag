@@ -17,11 +17,12 @@ import unittest
 from aiohttp import WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
-from swag_session.server import Config, SessionManager, create_app
+from swag_session.server import Config, SessionManager, Viewer, create_app
 
 
 FAKE_LAUNCHER = r'''
 import asyncio, fcntl, json, os, pathlib, signal
+from aiohttp import WSMsgType, web
 
 async def main():
     user, generation = os.environ['SWAG_USER'], os.environ['SWAG_GENERATION']
@@ -47,9 +48,36 @@ async def main():
         finally:
             connections.discard(writer)
             writer.close()
-    server = await asyncio.start_unix_server(echo, path=str(runtime / 'rfb.sock'))
+    backend = os.environ.get('SWAG_RENDER_BACKEND', 'tiger')
+    server = None
+    runner = None
+    ws_port = None
+    if backend == 'tiger':
+        server = await asyncio.start_unix_server(echo, path=str(runtime / 'rfb.sock'))
+    else:
+        async def echo_ws(request):
+            ws = web.WebSocketResponse(max_msg_size=16 * 1024 * 1024)
+            await ws.prepare(request)
+            await ws.send_bytes(b'RFB hello')
+            async for message in ws:
+                if message.type == WSMsgType.BINARY:
+                    await ws.send_bytes(message.data)
+            return ws
+        app = web.Application()
+        app.router.add_get('/', echo_ws)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '127.0.0.1', 0)
+        await site.start()
+        ws_port = site._server.sockets[0].getsockname()[1]
     manifest = artifact / 'launcher.json'
-    metadata = {'ready': True, 'user': user, 'generation': generation, 'app_pid': pid}
+    metadata = {'ready': True, 'user': user, 'generation': generation,
+                'launcher_pid': pid, 'app_pid': pid, 'render_backend': backend,
+                'helpers': {'qt': pid}}
+    if backend == 'tiger':
+        metadata['rfb_socket'] = str(runtime / 'rfb.sock')
+    else:
+        metadata['ws_port'] = ws_port
     manifest.write_text(json.dumps(metadata))
     end = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -57,8 +85,11 @@ async def main():
     await end.wait()
     for writer in connections.copy():
         writer.close()
-    server.close()
-    await server.wait_closed()
+    if server is not None:
+        server.close()
+        await server.wait_closed()
+    if runner is not None:
+        await runner.cleanup()
     metadata['ready'] = False
     manifest.write_text(json.dumps(metadata))
 
@@ -265,6 +296,147 @@ class Sessions(unittest.IsolatedAsyncioTestCase):
                 await viewer.send_bytes(payload)
             self.assertEqual((await viewer.receive(timeout=2)).type, WSMsgType.CLOSE)
         self.assertEqual((await self.get())["pid"], session["pid"])
+
+
+class QtWsSessions(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="swag-ws-", dir="/tmp")
+        self.root = Path(self.temporary.name)
+        launcher = self.root / "fake.py"
+        launcher.write_text(FAKE_LAUNCHER)
+        self.config = Config(
+            proxy_key="private-proxy-key", public_origin="http://swag.test",
+            runtime=self.root / "r", artifacts=self.root / "a",
+            service_token="bank-secret", render_backend="qt-ws",
+            lease_seconds=0.4, start_timeout=3,
+            launcher_command=(sys.executable, str(launcher)),
+        )
+        self.manager = SessionManager(self.config)
+        self.client = TestClient(TestServer(create_app(self.config, self.manager)))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self.temporary.cleanup()
+
+    def headers(self, mutation=False):
+        headers = {"X-Swag-Proxy-Key": self.config.proxy_key,
+                   "X-Swag-User": "alice", "Origin": self.config.public_origin}
+        if mutation:
+            headers["X-Swag-CSRF"] = self.csrf
+        return headers
+
+    async def start(self):
+        response = await self.client.get("/session", headers=self.headers())
+        self.csrf = (await response.json())["csrf_token"]
+        response = await self.client.post("/session", headers=self.headers(True))
+        self.assertEqual(response.status, 200, await response.text())
+        return await response.json()
+
+    async def test_binary_relay_takeover_and_manifest_identity(self):
+        session = await self.start()
+        manifest = self.root / "a" / "users" / "alice" / session["generation"] / "launcher.json"
+        metadata = json.loads(manifest.read_text())
+        self.assertEqual(metadata["render_backend"], "qt-ws")
+        self.assertEqual(metadata["launcher_pid"], self.manager.users["alice"].process.pid)
+        self.assertEqual(metadata["app_pid"], session["pid"])
+        self.assertTrue(1 <= metadata["ws_port"] <= 65535)
+        first = await self.client.ws_connect(
+            f"/viewer/{session['generation']}/websockify?port=1",
+            headers=self.headers(), protocols=("binary",))
+        self.assertEqual((await first.receive()).data, b"RFB hello")
+        await first.send_bytes(b"opaque\x00RFB")
+        self.assertEqual((await first.receive()).data, b"opaque\x00RFB")
+        second = await self.client.ws_connect(
+            f"/viewer/{session['generation']}/websockify",
+            headers=self.headers(), protocols=("binary",))
+        self.assertEqual((await second.receive()).data, b"RFB hello")
+        self.assertEqual((await first.receive(timeout=2)).type, WSMsgType.CLOSE)
+        await second.send_bytes(b"new viewer")
+        self.assertEqual((await second.receive()).data, b"new viewer")
+        await second.close()
+        self.assertEqual(self.manager.workspace("alice").state, "running")
+
+    async def test_nonobject_or_wrong_pid_manifest_cannot_select_endpoint(self):
+        for mutate in (lambda _m: [],
+                       lambda m: {**m, "app_pid": m["app_pid"] + 1000},
+                       lambda m: {**m, "ws_port": "5900"}):
+            session = await self.start()
+            manifest = self.root / "a" / "users" / "alice" / session["generation"] / "launcher.json"
+            manifest.write_text(json.dumps(mutate(json.loads(manifest.read_text()))))
+            with self.assertRaises(WSServerHandshakeError) as denied:
+                await self.client.ws_connect(
+                    f"/viewer/{session['generation']}/websockify", headers=self.headers())
+            self.assertEqual(denied.exception.status, 404)
+            self.assertEqual(self.manager.workspace("alice").state, "ended")
+
+    async def test_inner_websocket_handshake_failure_maps_to_503(self):
+        session = await self.start()
+        async def reject(reader, writer):
+            await reader.read(1024)
+            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+        server = await asyncio.start_server(reject, "127.0.0.1", 0)
+        try:
+            port = server.sockets[0].getsockname()[1]
+            manifest = self.root / "a" / "users" / "alice" / session["generation"] / "launcher.json"
+            metadata = json.loads(manifest.read_text())
+            metadata["ws_port"] = port
+            manifest.write_text(json.dumps(metadata))
+            with self.assertRaises(WSServerHandshakeError) as denied:
+                await self.client.ws_connect(
+                    f"/viewer/{session['generation']}/websockify", headers=self.headers())
+            self.assertEqual(denied.exception.status, 503)
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    async def test_lease_expiry_closes_both_sockets_and_preserves_workspace(self):
+        session = await self.start()
+        outer = await self.client.ws_connect(
+            f"/viewer/{session['generation']}/websockify",
+            headers=self.headers(), protocols=("binary",))
+        self.assertEqual((await outer.receive()).data, b"RFB hello")
+        viewer = self.manager.workspace("alice").viewer
+        self.assertIsNotNone(viewer)
+        self.assertEqual((await outer.receive(timeout=2)).type, WSMsgType.CLOSE)
+        for _ in range(50):
+            if viewer.close_task is not None and viewer.close_task.done():
+                break
+            await asyncio.sleep(0.02)
+        self.assertIsNotNone(viewer.close_task)
+        self.assertTrue(viewer.close_task.done())
+        self.assertTrue(viewer.upstream.closed)
+        self.assertTrue(viewer.client_session.closed)
+        self.assertEqual(self.manager.workspace("alice").state, "running")
+        self.assertEqual(self.manager.workspace("alice").pid, session["pid"])
+
+
+class ViewerCleanup(unittest.IsolatedAsyncioTestCase):
+    async def test_cancellation_does_not_abort_memoized_close(self):
+        entered, resume = asyncio.Event(), asyncio.Event()
+        calls = []
+        class Outer:
+            async def close(self, **_kwargs):
+                entered.set()
+                await resume.wait()
+                calls.append("outer")
+        class Upstream:
+            async def close(self):
+                calls.append("upstream")
+        class Session:
+            async def close(self):
+                calls.append("session")
+        viewer = Viewer(Outer(), 0, upstream=Upstream(), client_session=Session())
+        waiting = asyncio.create_task(viewer.close())
+        await entered.wait()
+        waiting.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await waiting
+        resume.set()
+        await viewer.close()
+        self.assertEqual(calls, ["outer", "upstream", "session"])
 
 
 if __name__ == "__main__":

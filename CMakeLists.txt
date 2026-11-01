@@ -44,6 +44,16 @@ if(SWAG_CONTAINER_ONLY)
     add_custom_target(app-mdi-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/mdi.py --engine "${SWAG_ENGINE}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-ws-build
+        COMMAND "${SWAG_PYTHON}" tools/app.py build --engine "${SWAG_ENGINE}" --render-backend qt-ws
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-ws-up
+        COMMAND "${SWAG_PYTHON}" tools/app.py up --engine "${SWAG_ENGINE}" --ui-mode mdi --render-backend qt-ws
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-ws-check
+        COMMAND "${SWAG_TEST_PYTHON}" tests/browser/mdi.py --engine "${SWAG_ENGINE}" --render-backend qt-ws --output artifacts/qt-ws-mdi/mdi
+        COMMAND "${SWAG_TEST_PYTHON}" tests/browser/workspace.py --engine "${SWAG_ENGINE}" --render-backend qt-ws --output artifacts/qt-ws-mdi/workspace
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_custom_target(app-resize-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/resize.py
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
