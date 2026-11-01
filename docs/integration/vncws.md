@@ -3,7 +3,7 @@
 Copy `src/plugins/vncws/` as a directory and build it against the client's Qt
 development packages. Its standalone CMake build requires CMake 3.16+, C++17,
 Qt 5.15 Core/Gui/Network/WebSockets, Qt's matching private headers and static
-platform-support libraries, pkg-config and libxkbcommon. It does not build SWAG
+platform-support libraries, pkg-config, libxkbcommon and zlib. It does not build SWAG
 or require SWAG's GCC 15/C++23 configuration. See the plugin README for EL8
 package names and the preserved upstream/SWAG license boundaries.
 
@@ -41,7 +41,7 @@ deployment policy.
 Current limits: Qt 5.15/Linux raster widgets; one viewer with takeover; one
 resizable screen (64..2048 per dimension, at most 2,073,600 pixels); 32-bit framebuffer;
 RFB 3.3 with little-endian RGB888 in either tested channel order; Raw encoding;
-Latin-1 clipboard. The RFB handshake deadline is 10 seconds. Input messages/queue
+negotiated UTF-8 clipboard with Latin-1 fallback. The RFB handshake deadline is 10 seconds. Input messages/queue
 are capped at 1 MiB, output queue at 16 MiB, encoding hints and distinct held
 keys at 256. Slow viewers exceeding the output cap are disconnected; adaptive
 backpressure/compression remains future work.
@@ -137,6 +137,24 @@ The original MDI suite passed 10 checks and existing protocol regressions passed
   --output artifacts/qt-ws-resize/browser
 ```
 
+The Unicode clipboard gate passed 23 independent protocol checks, 5 authenticated
+MDI browser checks and all 14 existing probe browser checks. It covers multilingual
+text in both directions, empty clipboard, reconnect, legacy Latin-1 clients,
+asymmetric capabilities and malformed/oversized compressed payloads. Extended
+Clipboard uses bounded zlib streams: compressed payload and expanded text are
+each limited to 1 MiB. This compresses clipboard text, not framebuffer updates.
+The combined C++23 application/C++17 plugin source build also passed with GCC 15
+and the same EL8 Qt packages. Evidence: `artifacts/qt-ws-clipboard/`.
+
+```sh
+.venv/bin/python tests/vncws_clipboard.py
+.venv/bin/python tests/browser/clipboard.py
+```
+
+Browser checks use the viewer's clipboard panel and real Qt copy/paste shortcuts.
+Native Windows clipboard permissions, remote-desktop forwarding, installed font
+coverage and IME behavior still need client-side checks.
+
 The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
 The browser client is understood to be Chrome on a Windows VM, probably in Azure;
 Azure hosting is unconfirmed. This is close to the tested EL8 stack, but the exact
@@ -157,6 +175,6 @@ the actual browser-to-server network path and Windows display scaling/keyboard
 behavior. If the Windows VM is accessed through remote desktop, also check its
 additional clipboard and keyboard path.
 
-Native X11 handles, OpenGL/Qt Quick/WebEngine, IME, Unicode
-clipboard and WAN/concurrency envelopes are not qualified. TigerVNC remains the
+Native X11 handles, OpenGL/Qt Quick/WebEngine, IME and WAN/concurrency
+envelopes are not qualified. TigerVNC remains the
 default and fallback renderer.

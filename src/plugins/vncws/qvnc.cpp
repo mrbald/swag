@@ -720,17 +720,8 @@ void QVncServer::setRemoteClipboardText(const QString &text)
 
 void QVncServer::sendClipboardText(const QString &text)
 {
-    const QByteArray payload = text.toLatin1(); // RFB 3.3 ServerCutText is Latin-1.
-    if (payload.size() > 1024 * 1024)
-        return;
-    char header[8] = {3, 0, 0, 0, 0, 0, 0, 0};
-    const quint32 length = htonl(quint32(payload.size()));
-    std::memcpy(header + 4, &length, sizeof(length));
     for (auto *client : qAsConst(clients)) {
-        if (client->isConnected()) {
-            client->clientSocket()->write(header, sizeof(header));
-            client->clientSocket()->write(payload);
-        }
+        client->sendClipboardText(text);
     }
 }
 

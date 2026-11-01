@@ -74,7 +74,7 @@ ENTRYPOINT ["/usr/bin/python3.12", "/opt/swag/backends/launch.py"]
 # Opt-in plugin build: private Qt QPA APIs stay out of normal application builds.
 FROM probe AS probe-ws-deps
 USER 0
-RUN dnf -y install qt5-qtbase-private-devel qt5-qtbase-static qt5-qtwebsockets-devel libxkbcommon-devel \
+RUN dnf -y install qt5-qtbase-private-devel qt5-qtbase-static qt5-qtwebsockets-devel libxkbcommon-devel zlib-devel \
     && dnf clean all && rm -rf /var/cache/dnf
 
 FROM probe-ws-deps AS probe-ws

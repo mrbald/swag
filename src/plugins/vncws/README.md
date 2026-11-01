@@ -6,7 +6,7 @@ its own; no SWAG application source or GCC 15 toolchain is needed.
 
 On AlmaLinux 8, install `cmake`, a C++17 compiler, `pkgconf-pkg-config`,
 `qt5-qtbase-devel`, `qt5-qtbase-private-devel`, `qt5-qtbase-static`,
-`qt5-qtwebsockets-devel`, and `libxkbcommon-devel`. Build against the same
+`qt5-qtwebsockets-devel`, `libxkbcommon-devel`, and `zlib-devel`. Build against the same
 Qt packages used by the host application:
 
 ```sh
@@ -33,8 +33,10 @@ to adopt an inherited, already listening TCP socket bound to `127.0.0.1`;
 close-on-exec on that descriptor. Defaults are 1024x768, depth 32, port 5900,
 and 127.0.0.1. Invalid, duplicate, or unknown parameters fail startup. The RFB
 handshake is limited to 10 seconds. RFB 3.3 has no authentication or encryption;
-expose this listener only within a trusted access boundary. Clipboard text uses
-RFB's Latin-1 encoding.
+expose this listener only within a trusted access boundary. The Extended
+Clipboard pseudo-encoding transfers UTF-8 text through a bounded zlib payload
+when the viewer supports it. Unnegotiated viewers use RFB's Latin-1 text path.
+Clipboard text and compressed messages are limited to 1 MiB.
 
 The accepted client pixel formats are 32 bits per pixel, depth 24 or 32,
 little-endian true color with 8-bit red/green/blue channels and shifts either

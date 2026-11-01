@@ -72,6 +72,7 @@ public:
     QVncServer *server() const { return m_server; }
 
     void setDirty(const QRegion &region);
+    void sendClipboardText(const QString &text);
     void setDirtyCursor() { m_dirtyCursor = true; scheduleUpdate(); }
     QRegion dirtyRegion() const { return m_dirtyRegion.intersected(m_requestRect); }
     inline bool isConnected() const { return m_state == Connected; }
@@ -111,6 +112,9 @@ private:
     void releaseInput();
     void sendEmptyUpdate();
     void sendExtendedDesktopSize(quint16 reason, quint16 status);
+    void sendExtendedClipboard(quint32 flags, const QByteArray &data = QByteArray());
+    void sendExtendedClipboardProvide(const QString &text);
+    void handleExtendedClipboard(const QByteArray &message);
     void initializePixelFormat(const QRfbPixelFormat &format);
     bool validPixelFormat(const QRfbPixelFormat &format) const;
     void setPixelFormat();
@@ -135,6 +139,10 @@ private:
     bool m_needConversion;
     int m_encodingsPending;
     int m_cutTextPending;
+    bool m_cutTextExtended = false;
+    bool m_supportExtendedClipboard = false;
+    quint32 m_clientClipboardActions = 0;
+    bool m_clientClipboardText = false;
     uint m_supportCopyRect : 1;
     uint m_supportRRE : 1;
     uint m_supportCoRRE : 1;

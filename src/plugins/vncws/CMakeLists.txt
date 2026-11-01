@@ -10,6 +10,7 @@ find_package(Qt5FontDatabaseSupport REQUIRED)
 find_package(Qt5ServiceSupport REQUIRED)
 find_package(Qt5EventDispatcherSupport REQUIRED)
 find_package(PkgConfig REQUIRED)
+find_package(ZLIB REQUIRED)
 pkg_check_modules(XKBCOMMON REQUIRED IMPORTED_TARGET xkbcommon)
 
 add_library(qvncws MODULE
@@ -27,5 +28,6 @@ target_link_libraries(qvncws PRIVATE
     Qt5::FbSupportPrivate Qt5::FontDatabaseSupportPrivate
     Qt5::ServiceSupportPrivate Qt5::EventDispatcherSupportPrivate
     PkgConfig::XKBCOMMON
+    ZLIB::ZLIB
 )
 install(TARGETS qvncws LIBRARY DESTINATION plugins/platforms)
