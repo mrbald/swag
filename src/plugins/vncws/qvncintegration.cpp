@@ -58,7 +58,48 @@
 #include <QtCore/QSet>
 #include <QtNetwork/QHostAddress>
 
+#ifdef Q_OS_UNIX
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#endif
+
 QT_BEGIN_NAMESPACE
+
+namespace {
+
+quint16 validateListeningFd(int fd)
+{
+#ifdef Q_OS_UNIX
+    int type = 0;
+    socklen_t length = sizeof(type);
+    if (::getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0 ||
+        length != sizeof(type) || type != SOCK_STREAM)
+        qFatal("vncws: fd must be a listening loopback TCP socket");
+    int accepting = 0;
+    length = sizeof(accepting);
+    if (::getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &length) != 0 ||
+        length != sizeof(accepting) || accepting != 1)
+        qFatal("vncws: fd must already be listening");
+    sockaddr_in address{};
+    length = sizeof(address);
+    if (::getsockname(fd, reinterpret_cast<sockaddr *>(&address), &length) != 0 ||
+        length != sizeof(address) || address.sin_family != AF_INET ||
+        ntohl(address.sin_addr.s_addr) != 0x7f000001U ||
+        ntohs(address.sin_port) == 0)
+        qFatal("vncws: fd must bind 127.0.0.1 on a nonzero TCP port");
+    const int flags = ::fcntl(fd, F_GETFD);
+    if (flags < 0 || ::fcntl(fd, F_SETFD, flags | FD_CLOEXEC) < 0)
+        qFatal("vncws: cannot mark inherited fd close-on-exec");
+    return ntohs(address.sin_port);
+#else
+    Q_UNUSED(fd)
+    qFatal("vncws: inherited fd requires a Unix platform");
+#endif
+}
+
+} // namespace
 
 QVncIntegration::QVncIntegration(const QStringList &paramList)
     : m_fontDb(new QGenericUnixFontDatabase),
@@ -67,6 +108,7 @@ QVncIntegration::QVncIntegration(const QStringList &paramList)
     QSize size(1024, 768);
     QHostAddress address(QHostAddress::LocalHost);
     quint16 port = 5900;
+    int inheritedFd = -1;
     QSet<QString> seen;
     const QRegularExpression sizeRx(QStringLiteral("^([0-9]+)x([0-9]+)$"));
     const QRegularExpression ipv4Rx(QStringLiteral("^([0-9]{1,3}\\.){3}[0-9]{1,3}$"));
@@ -104,13 +146,24 @@ QVncIntegration::QVncIntegration(const QStringList &paramList)
             if (!ipv4Rx.match(value).hasMatch() || !address.setAddress(value) ||
                 address.protocol() != QAbstractSocket::IPv4Protocol)
                 qFatal("vncws: addr must be a dotted-decimal IPv4 address");
+        } else if (key == QLatin1String("fd")) {
+            bool valid = false;
+            const int number = value.toInt(&valid);
+            if (!numberRx.match(value).hasMatch() || !valid || number < 3)
+                qFatal("vncws: fd must be an inherited descriptor >= 3");
+            inheritedFd = number;
         } else {
             qFatal("vncws: unknown platform parameter '%s'", qPrintable(key));
         }
     }
+    if (inheritedFd >= 0) {
+        if (seen.contains(QStringLiteral("addr")) || seen.contains(QStringLiteral("port")))
+            qFatal("vncws: fd cannot be combined with addr or port");
+        port = validateListeningFd(inheritedFd);
+    }
 
     m_primaryScreen = new QVncScreen(size);
-    m_server = new QVncServer(m_primaryScreen, address, port);
+    m_server = new QVncServer(m_primaryScreen, address, port, inheritedFd);
     m_primaryScreen->vncServer = m_server;
 }
 

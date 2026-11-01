@@ -634,10 +634,12 @@ uint QVncClientCursor::removeClient(QVncClient *client)
 }
 #endif // QT_CONFIG(cursor)
 
-QVncServer::QVncServer(QVncScreen *screen, const QHostAddress &address, quint16 port)
+QVncServer::QVncServer(QVncScreen *screen, const QHostAddress &address,
+                       quint16 port, int inheritedFd)
     : qvnc_screen(screen)
     , m_address(address)
     , m_port(port)
+    , m_inheritedFd(inheritedFd)
 {
     QMetaObject::invokeMethod(this, "init", Qt::QueuedConnection);
 }
@@ -646,10 +648,15 @@ void QVncServer::init()
 {
     serverSocket = new QWebSocketServer(QStringLiteral("SWAG VNCWS"),
                                         QWebSocketServer::NonSecureMode, this);
-    if (!serverSocket->listen(m_address, m_port))
+    if (m_inheritedFd >= 0) {
+        if (!serverSocket->setNativeDescriptor(qintptr(m_inheritedFd)))
+            qFatal("vncws: cannot adopt listening fd %d: %s", m_inheritedFd,
+                   qPrintable(serverSocket->errorString()));
+    } else if (!serverSocket->listen(m_address, m_port)) {
         qFatal("vncws: cannot listen on %s:%u: %s",
                qPrintable(m_address.toString()), unsigned(m_port),
                qPrintable(serverSocket->errorString()));
+    }
     qInfo("vncws: WebSocket listening on %s:%u",
           qPrintable(m_address.toString()), unsigned(m_port));
 

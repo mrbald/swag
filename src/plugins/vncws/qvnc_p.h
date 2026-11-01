@@ -395,7 +395,8 @@ class QVncServer : public QObject
 {
     Q_OBJECT
 public:
-    QVncServer(QVncScreen *screen, const QHostAddress &address, quint16 port);
+    QVncServer(QVncScreen *screen, const QHostAddress &address, quint16 port,
+               int inheritedFd = -1);
     ~QVncServer();
 
     enum ServerMsg { FramebufferUpdate = 0,
@@ -421,6 +422,7 @@ private:
     QVncScreen *qvnc_screen;
     QHostAddress m_address;
     quint16 m_port;
+    int m_inheritedFd;
     bool m_remoteClipboardChange = false;
 };
 

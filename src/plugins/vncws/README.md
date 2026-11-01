@@ -27,8 +27,11 @@ viewer takes over the connection.
 
 Accepted parameters are `size=WxH` (each dimension 64–2048, area at most
 2,073,600 pixels), `depth=32`, `port=1..65535`, and `addr=` followed by a
-dotted-decimal IPv4 address. Defaults are 1024x768, depth 32, port 5900, and
-127.0.0.1. Invalid, duplicate, or unknown parameters fail startup. The RFB
+dotted-decimal IPv4 address. Supervised Linux launches may instead use `fd=N`
+to adopt an inherited, already listening TCP socket bound to `127.0.0.1`;
+`fd` cannot be combined with `addr` or `port`. The plugin restores
+close-on-exec on that descriptor. Defaults are 1024x768, depth 32, port 5900,
+and 127.0.0.1. Invalid, duplicate, or unknown parameters fail startup. The RFB
 handshake is limited to 10 seconds. RFB 3.3 has no authentication or encryption;
 expose this listener only within a trusted access boundary. Clipboard text uses
 RFB's Latin-1 encoding.

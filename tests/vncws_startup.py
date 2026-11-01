@@ -30,11 +30,11 @@ def check(name, function):
 with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
     state = Path(directory)/'state.json'
 
-    def fails(options):
+    def fails(options, pass_fds=()):
         result = subprocess.run(['/opt/swag/bin/swag-probe'],
                                 env=environment('vncws:'+options, state),
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, timeout=3)
+                                text=True, timeout=3, pass_fds=pass_fds)
         assert result.returncode != 0, result.stdout
         assert 'vncws:' in result.stdout, result.stdout
         return dict(exit_code=result.returncode, diagnostic=result.stdout.strip())
@@ -42,7 +42,9 @@ with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
     for options in ['size=0x800', 'size=4096x4096', 'size=2048x2048',
                     'size=1280x800junk', 'size=800x600:size=800x600',
                     'depth=16', 'port=0', 'port=65536', 'port=5900junk',
-                    'addr=localhost', 'addr=999.0.0.1', 'unknown=1']:
+                    'addr=localhost', 'addr=999.0.0.1', 'unknown=1',
+                    'fd=2', 'fd=-1', 'fd=999999', 'fd=3junk',
+                    'fd=3:port=5900', 'fd=3:addr=127.0.0.1', 'fd=3:fd=3']:
         check('reject_'+options, lambda options=options: fails(options))
     with socket.socket() as occupied:
         occupied.bind(('127.0.0.1', 0))
@@ -79,6 +81,74 @@ with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
                     process.kill()
                     process.wait()
     check('default_listener_is_loopback', default_loopback)
+
+    read_fd, write_fd = os.pipe()
+    try:
+        check('reject_pipe_fd', lambda: fails(f'fd={read_fd}', (read_fd,)))
+    finally:
+        os.close(read_fd)
+        os.close(write_fd)
+    with socket.socket() as unbound:
+        check('reject_non_listening_fd', lambda: fails(f'fd={unbound.fileno()}', (unbound.fileno(),)))
+    with socket.socket() as wildcard:
+        wildcard.bind(('0.0.0.0', 0))
+        wildcard.listen()
+        check('reject_non_loopback_listener', lambda: fails(f'fd={wildcard.fileno()}', (wildcard.fileno(),)))
+
+    def inherited_listener():
+        reservation = socket.socket()
+        reservation.bind(('127.0.0.1', 0))
+        reservation.listen()
+        port, fd = reservation.getsockname()[1], reservation.fileno()
+        trampoline = os.environ.get('PYTHONPATH') == '/opt/swag/python'
+        command = ['/opt/swag/bin/swag-probe']
+        if trampoline:
+            command = ['/usr/bin/python3.12', '-m', 'swag_session.processes', str(os.getpid()), *command]
+        state.unlink(missing_ok=True)
+        with (Path(directory)/'inherited.log').open('w+') as log:
+            try:
+                # Exercise the real parent-death/exec trampoline as well as Popen.
+                process = subprocess.Popen(
+                    command,
+                    env=environment(f'vncws:fd={fd}', state), pass_fds=(fd,),
+                    stdout=log, stderr=subprocess.STDOUT)
+            finally:
+                reservation.close()
+            try:
+                deadline = time.monotonic()+5
+                while not state.exists() and time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        log.seek(0)
+                        raise AssertionError(log.read())
+                    time.sleep(.05)
+                assert state.exists(), 'Qt observation did not become ready'
+                info = Path(f'/proc/{process.pid}/fdinfo/{fd}').read_text()
+                flags = int(next(line.split()[1] for line in info.splitlines()
+                                 if line.startswith('flags:')), 8)
+                assert flags & os.O_CLOEXEC, 'adopted listener can leak through a later exec'
+                with socket.create_connection(('127.0.0.1', port), timeout=3) as client:
+                    client.sendall((f'GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n'
+                                    'Upgrade: websocket\r\nConnection: Upgrade\r\n'
+                                    'Sec-WebSocket-Key: MDEyMzQ1Njc4OWFiY2RlZg==\r\n'
+                                    'Sec-WebSocket-Version: 13\r\n\r\n').encode())
+                    received = b''
+                    while b'RFB 003.003\n' not in received:
+                        data = client.recv(4096)
+                        assert data, received
+                        received += data
+                        assert len(received) < 8192, received
+                    assert received.startswith(b'HTTP/1.1 101 '), received
+                return dict(address='127.0.0.1', port=port, parent_copy_closed=True,
+                            exec_trampoline=trampoline, websocket_rfb_greeting=True,
+                            close_on_exec=True)
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+    check('inherited_listener_survives_exec_and_parent_close', inherited_listener)
 
 print(json.dumps(results, indent=2))
 raise SystemExit(int(any(r['status'] != 'pass' for r in results)))
