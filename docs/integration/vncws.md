@@ -116,7 +116,26 @@ match the reviewed sources. Evidence is under `artifacts/qt-ws-mdi/`, including
 The same 10 MDI checks also passed on the TigerVNC fallback, using that identical
 Qt executable; see `artifacts/qt-ws-mdi/tiger-mdi/`.
 
-The client's exact Qt/OS/architecture and actual application remain unverified.
+The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
+The browser client is understood to be Chrome on a Windows VM, probably in Azure;
+Azure hosting is unconfirmed. This is close to the tested EL8 stack, but the exact
+Qt RPM versions, Linux CPU architecture and actual client application remain
+unverified. The plugin currently requires Qt 5.15 and matching private development
+packages; its C++17 target can be built alongside the C++23 application.
+
+Capture the target package versions and architecture before the client build:
+
+```sh
+uname -m
+rpm -q qt5-qtbase qt5-qtbase-devel qt5-qtbase-private-devel \
+  qt5-qtbase-static qt5-qtwebsockets-devel
+```
+
+Chrome's host OS does not change the Linux plugin build. Qualification must cover
+the actual browser-to-server network path and Windows display scaling/keyboard
+behavior. If the Windows VM is accessed through remote desktop, also check its
+additional clipboard and keyboard path.
+
 Native X11 handles, OpenGL/Qt Quick/WebEngine, IME, dynamic resizing, Unicode
 clipboard and WAN/concurrency envelopes are not qualified. TigerVNC remains the
 default and fallback renderer.

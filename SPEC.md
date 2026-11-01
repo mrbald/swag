@@ -5,6 +5,12 @@ through a browser canvas. CMake is the top-level build; application code is C++2
 with GCC Toolset 15 (no newer compiler), and Python 3.12. Use nanobind if native
 Python bindings become useful. Boost is available when needed.
 
+The client reports RHEL 8 with its distribution Qt 5 packages and a C++23 build
+using GCC Toolset 15. The browser client is understood to be Chrome on a Windows
+VM, probably hosted in Azure (hosting unconfirmed). Exact Linux architecture,
+Qt package versions and compatibility of the actual client application remain
+qualification inputs; the current plugin requires Qt 5.15.
+
 One shared service account hosts strictly zero or one Qt GUI process per user.
 Usernames are stable, short, unique within the configured identity realm, and
 alphanumeric. The authenticated proxy supplies identity; the session manager binds
