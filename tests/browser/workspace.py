@@ -87,7 +87,23 @@ class Actor:
                 canvas["y"] + (y + height*fy)*canvas["height"]/remote_height)
 
     def click(self, name):
-        state = self.wait(lambda s: name in s.get("geometry", {}))
+        if name.startswith("modal_button_"):
+            # openMessageBox publishes once before its queued layout/centering.
+            # Require stable geometry across the observer's 200 ms refresh;
+            # the first published coordinates can point at the dialog label.
+            previous, stable_since = None, time.monotonic()
+
+            def settled(state):
+                nonlocal previous, stable_since
+                geometry = state.get("geometry", {})
+                target = (geometry.get("modal"), geometry.get(name))
+                if target != previous:
+                    previous, stable_since = target, time.monotonic()
+                return all(target) and time.monotonic() - stable_since >= .25
+
+            state = self.wait(settled)
+        else:
+            state = self.wait(lambda s: name in s.get("geometry", {}))
         self.page.mouse.click(*self.canvas_point(state["geometry"][name]))
         # A click may need an X11 window-manager focus round trip before typing.
         self.page.wait_for_timeout(160)
