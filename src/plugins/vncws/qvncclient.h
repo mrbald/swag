@@ -84,6 +84,7 @@ public:
 
     void convertPixels(char *dst, const char *src, int count) const;
     inline bool doPixelConversion() const { return m_needConversion; }
+    bool useZlib() const { return m_useZlib; }
 
 signals:
 
@@ -92,9 +93,7 @@ private slots:
     void discardClient();
     void checkUpdate();
     void scheduleUpdate();
-
-protected:
-    bool event(QEvent *event) override;
+    void onOutputDrained();
 
 private:
     enum ClientState {
@@ -143,6 +142,7 @@ private:
     bool m_supportExtendedClipboard = false;
     quint32 m_clientClipboardActions = 0;
     bool m_clientClipboardText = false;
+    bool m_useZlib = false;
     uint m_supportCopyRect : 1;
     uint m_supportRRE : 1;
     uint m_supportCoRRE : 1;
@@ -157,10 +157,12 @@ private:
     QPointF m_lastPointerPos;
     QHash<quint32, HeldKey> m_heldKeys;
     QTimer m_handshakeTimer;
+    QTimer m_updateTimer;
     QRect m_requestRect;
     bool m_discarded = false;
     bool m_dirtyCursor;
     bool m_updatePending;
+    bool m_backpressureDeferred = false;
 #if Q_BYTE_ORDER == Q_BIG_ENDIAN
     bool m_swapBytes;
 #endif

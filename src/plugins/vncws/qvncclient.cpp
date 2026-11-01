@@ -169,6 +169,13 @@ QVncClient::QVncClient(QIODevice *clientSocket, QVncServer *server)
     m_clientSocket->setParent(this);
     connect(m_clientSocket,SIGNAL(readyRead()),this,SLOT(readClient()));
     connect(m_clientSocket,SIGNAL(disconnected()),this,SLOT(discardClient()));
+    connect(static_cast<QVncWebSocketStream *>(m_clientSocket),
+            &QVncWebSocketStream::outputDrained, this, &QVncClient::onOutputDrained);
+    m_updateTimer.setSingleShot(true);
+    connect(&m_updateTimer, &QTimer::timeout, this, [this]() {
+        m_updatePending = false;
+        checkUpdate();
+    });
     m_handshakeTimer.setSingleShot(true);
     connect(&m_handshakeTimer, &QTimer::timeout, this, [this]() {
         qWarning("vncws: RFB handshake timed out");
@@ -197,6 +204,7 @@ void QVncClient::close()
         return;
     m_state = Disconnected;
     m_handshakeTimer.stop();
+    m_updateTimer.stop();
     releaseInput();
     static_cast<QVncWebSocketStream *>(m_clientSocket)->close();
 }
@@ -221,6 +229,8 @@ void QVncClient::releaseInput()
 void QVncClient::setDirty(const QRegion &region)
 {
     m_dirtyRegion += region.intersected(m_server->screen()->geometry());
+    if (m_dirtyRegion.rectCount() > 4096)
+        m_dirtyRegion = m_dirtyRegion.boundingRect();
     if (m_state == Connected &&
         ((m_server->dirtyMap()->numDirty > 0) || m_dirtyCursor)) {
         scheduleUpdate();
@@ -492,6 +502,13 @@ void QVncClient::checkUpdate()
         m_wantUpdate = false;
         return;
     }
+    const qint64 pending = static_cast<QVncWebSocketStream *>(m_clientSocket)->queuedOutputBytes();
+    if (pending > 1024 * 1024) {
+        if (!m_backpressureDeferred)
+            qCDebug(lcVnc) << "framebuffer deferred" << pending << "queued bytes";
+        m_backpressureDeferred = true;
+        return;
+    }
 #if QT_CONFIG(cursor)
     if (m_dirtyCursor && m_supportCursor && m_server->screen()->clientCursor) {
         m_server->screen()->clientCursor->write(this);
@@ -597,20 +614,22 @@ void QVncClient::sendClipboardText(const QString &text)
 
 void QVncClient::scheduleUpdate()
 {
-    if (!m_updatePending) {
+    if (!m_updatePending && !m_backpressureDeferred && m_state == Connected) {
         m_updatePending = true;
-        QCoreApplication::postEvent(this, new QEvent(QEvent::UpdateRequest));
+        m_updateTimer.start(16);
     }
 }
 
-bool QVncClient::event(QEvent *event)
+void QVncClient::onOutputDrained()
 {
-    if (event->type() == QEvent::UpdateRequest) {
-        m_updatePending = false;
-        checkUpdate();
-        return true;
-    }
-    return QObject::event(event);
+    if (!m_backpressureDeferred || m_state != Connected)
+        return;
+    const qint64 pending = static_cast<QVncWebSocketStream *>(m_clientSocket)->queuedOutputBytes();
+    if (pending > 512 * 1024)
+        return;
+    m_backpressureDeferred = false;
+    qCDebug(lcVnc) << "framebuffer resumed" << pending << "queued bytes";
+    scheduleUpdate();
 }
 
 void QVncClient::setPixelFormat()
@@ -649,6 +668,7 @@ void QVncClient::setEncodings()
     bool wantsCursor = false;
     bool wantsDesktopSize = false;
     bool wantsClipboard = false;
+    int preferredPixels = -1;
     for (int i = 0; i < m_encodingsPending; ++i) {
         qint32 encoding;
         m_clientSocket->read(reinterpret_cast<char *>(&encoding), sizeof(encoding));
@@ -659,6 +679,8 @@ void QVncClient::setEncodings()
             wantsDesktopSize = true;
         if (quint32(encoding) == ExtendedClipboardEncoding)
             wantsClipboard = true;
+        if ((encoding == 0 || encoding == 6) && preferredPixels < 0)
+            preferredPixels = encoding;
         // Other entries are preference hints. Raw is mandatory in RFB.
     }
     if (wantsCursor && !m_supportCursor)
@@ -668,6 +690,10 @@ void QVncClient::setEncodings()
         m_dirtyCursor = false;
     }
     m_supportCursor = wantsCursor;
+    const bool useZlib = preferredPixels == 6;
+    if (m_useZlib != useZlib)
+        qCDebug(lcVnc) << "framebuffer encoding" << (useZlib ? 6 : 0);
+    m_useZlib = useZlib;
     m_supportDesktopSize = wantsDesktopSize;
     if (!wantsDesktopSize)
         m_sentDesktopSize = false;
@@ -723,7 +749,7 @@ void QVncClient::frameBufferUpdateRequest()
             setDirty(m_requestRect);
         }
         m_wantUpdate = true;
-        checkUpdate();
+        scheduleUpdate();
         m_handleMsg = false;
     }
 }

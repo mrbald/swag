@@ -467,6 +467,82 @@ bool QRfbClientCutText::read(QIODevice *s)
     return true;
 }
 
+QRfbRawEncoder::~QRfbRawEncoder()
+{
+    if (zlibInitialized)
+        deflateEnd(&zlibStream);
+}
+
+bool QRfbRawEncoder::writeZlib(const QImage &screenImage, const QRegion &region)
+{
+    constexpr int MaxStagedBytes = 12 * 1024 * 1024;
+    try {
+        if (!zlibInitialized) {
+            if (deflateInit(&zlibStream, Z_BEST_SPEED) != Z_OK) {
+                qWarning("vncws: cannot initialize framebuffer zlib stream");
+                client->close();
+                return false;
+            }
+            zlibInitialized = true;
+        }
+
+        QByteArray packet(4, '\0');
+        qToBigEndian(quint16(region.rectCount()),
+                    reinterpret_cast<uchar *>(packet.data() + 2));
+        for (const QRect &rect : region) {
+            const int rowBytes = rect.width() * client->clientBytesPerPixel();
+            const int pixelBytes = rowBytes * rect.height();
+            QByteArray pixels(pixelBytes, '\0');
+            for (int row = 0; row < rect.height(); ++row) {
+                const char *source = reinterpret_cast<const char *>(screenImage.constScanLine(rect.y() + row))
+                                     + rect.x() * screenImage.depth() / 8;
+                char *destination = pixels.data() + row * rowBytes;
+                if (client->doPixelConversion())
+                    client->convertPixels(destination, source, rect.width());
+                else
+                    memcpy(destination, source, size_t(rowBytes));
+            }
+
+            zlibStream.next_in = reinterpret_cast<Bytef *>(pixels.data());
+            zlibStream.avail_in = uInt(pixelBytes);
+            QByteArray compressed(int(deflateBound(&zlibStream, uLong(pixelBytes)) + 6), '\0');
+            zlibStream.next_out = reinterpret_cast<Bytef *>(compressed.data());
+            zlibStream.avail_out = uInt(compressed.size());
+            const int status = deflate(&zlibStream, Z_SYNC_FLUSH);
+            if (status != Z_OK || zlibStream.avail_in != 0 || zlibStream.avail_out == 0) {
+                qWarning("vncws: framebuffer zlib compression failed");
+                client->close();
+                return false;
+            }
+            compressed.resize(compressed.size() - int(zlibStream.avail_out));
+            if (compressed.size() > MaxStagedBytes - packet.size() - 16) {
+                qWarning("vncws: compressed framebuffer update exceeds staging limit");
+                client->close();
+                return false;
+            }
+
+            char header[16] = {};
+            qToBigEndian(quint16(rect.x()), reinterpret_cast<uchar *>(header));
+            qToBigEndian(quint16(rect.y()), reinterpret_cast<uchar *>(header + 2));
+            qToBigEndian(quint16(rect.width()), reinterpret_cast<uchar *>(header + 4));
+            qToBigEndian(quint16(rect.height()), reinterpret_cast<uchar *>(header + 6));
+            qToBigEndian(quint32(6), reinterpret_cast<uchar *>(header + 8));
+            qToBigEndian(quint32(compressed.size()), reinterpret_cast<uchar *>(header + 12));
+            packet.append(header, 16);
+            packet.append(compressed);
+        }
+        if (client->clientSocket()->write(packet) != packet.size()) {
+            client->close();
+            return false;
+        }
+        return true;
+    } catch (const std::bad_alloc &) {
+        qWarning("vncws: cannot allocate framebuffer update");
+        client->close();
+        return false;
+    }
+}
+
 void QRfbRawEncoder::write()
 {
 //    QVncDirtyMap *map = server->dirtyMap();
@@ -479,7 +555,13 @@ void QRfbRawEncoder::write()
     const QImage screenImage = client->server()->screenImage();
     QRegion rgn = client->dirtyRegion();
     rgn &= QRect(0, 0, screenImage.width(), screenImage.height());
+    if (rgn.rectCount() > 4096)
+        rgn = rgn.boundingRect();
     qCDebug(lcVnc) << "QRfbRawEncoder::write()" << rgn;
+    if (client->useZlib()) {
+        writeZlib(screenImage, rgn);
+        return;
+    }
 //    if (map) {
 //        for (int y = 0; y < map->mapHeight; ++y) {
 //            for (int x = 0; x < map->mapWidth; ++x) {

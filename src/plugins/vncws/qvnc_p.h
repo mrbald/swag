@@ -47,6 +47,7 @@
 #include <QtCore/qvarlengtharray.h>
 #include <QtNetwork/QHostAddress>
 #include <qpa/qplatformcursor.h>
+#include <zlib.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -223,11 +224,15 @@ class QRfbRawEncoder : public QRfbEncoder
 {
 public:
     QRfbRawEncoder(QVncClient *s) : QRfbEncoder(s) {}
+    ~QRfbRawEncoder() override;
 
     void write() override;
 
 private:
+    bool writeZlib(const QImage &image, const QRegion &region);
     QByteArray buffer;
+    z_stream zlibStream{};
+    bool zlibInitialized = false;
 };
 
 template <class SRC> class QRfbHextileEncoder;

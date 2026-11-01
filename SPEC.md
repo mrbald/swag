@@ -99,6 +99,14 @@ input/visual responsiveness, resource use and failures before selecting further
 compression or pacing work. Keep TigerVNC as the fallback and commit verified
 checkpoints. Production packaging and site configuration remain with the user.
 
+The measured Raw framebuffer path is too slow on the shaped WAN profiles. The
+next increment adds negotiated lossless RFB zlib encoding with Raw fallback,
+bounded update coalescing and transport-drain pacing. Preserve the same client,
+application executable and source-copy build contract. Independently verify
+decoded pixels, stream lifetime, negotiation changes and slow-reader recovery;
+rerun the original browser workflows and the same three network profiles before
+claiming improvement. Keep bounded queues and existing authentication unchanged.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

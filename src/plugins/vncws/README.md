@@ -48,7 +48,11 @@ descriptor in response to each nonincremental framebuffer request. A
 SetDesktopSize (`251`) request can resize that screen within the same size
 limits as startup. Unsupported dimensions or screen layouts receive an RFB
 status reply without disconnecting. The Qt process and its windows remain in
-place; framebuffer pixels are still sent with Raw encoding.
+place. The viewer may prefer standard zlib encoding (`6`) over Raw (`0`);
+one zlib stream is kept for the connection across resize and encoding
+renegotiation. Raw remains the fallback. Framebuffer updates are coalesced for
+about 16 ms and deferred while the WebSocket output queue is congested;
+clipboard and size replies retain their stream order.
 
 The files `main.cpp`, `qvnc.cpp`, `qvnc_p.h`, `qvncclient.cpp`,
 `qvncclient.h`, `qvncintegration.cpp`, `qvncintegration.h`,

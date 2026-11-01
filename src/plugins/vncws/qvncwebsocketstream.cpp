@@ -36,11 +36,20 @@ QVncWebSocketStream::QVncWebSocketStream(QWebSocket *socket, QObject *parent)
             [this](const QString &) { close(); });
     connect(m_socket, &QWebSocket::disconnected, this,
             &QVncWebSocketStream::finishDisconnect);
+    connect(m_socket, &QWebSocket::bytesWritten, this, [this](qint64) {
+        if (!m_closed && m_socket->bytesToWrite() <= 512 * 1024)
+            emit outputDrained();
+    });
 }
 
 qint64 QVncWebSocketStream::bytesAvailable() const
 {
     return m_input.size() + QIODevice::bytesAvailable();
+}
+
+qint64 QVncWebSocketStream::queuedOutputBytes() const
+{
+    return m_socket->bytesToWrite();
 }
 
 void QVncWebSocketStream::close()

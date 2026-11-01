@@ -17,10 +17,12 @@ public:
     explicit QVncWebSocketStream(QWebSocket *socket, QObject *parent = nullptr);
     bool isSequential() const override { return true; }
     qint64 bytesAvailable() const override;
+    qint64 queuedOutputBytes() const;
     void close() override;
 
 signals:
     void disconnected();
+    void outputDrained();
 
 protected:
     qint64 readData(char *data, qint64 maxSize) override;
