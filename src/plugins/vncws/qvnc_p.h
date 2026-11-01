@@ -66,10 +66,11 @@ class QVncClient;
 class QVncDirtyMap
 {
 public:
-    QVncDirtyMap(QVncScreen *screen);
+    QVncDirtyMap(QVncScreen *screen, const QSize &size);
     virtual ~QVncDirtyMap();
 
     void reset();
+    bool isValid() const { return map && buffer; }
     bool dirty(int x, int y) const;
     virtual void setDirty(int x, int y, bool force = false) = 0;
     void setClean(int x, int y);
@@ -93,7 +94,7 @@ template <class T>
 class QVncDirtyMapOptimized : public QVncDirtyMap
 {
 public:
-    QVncDirtyMapOptimized(QVncScreen *screen) : QVncDirtyMap(screen) {}
+    QVncDirtyMapOptimized(QVncScreen *screen, const QSize &size) : QVncDirtyMap(screen, size) {}
     ~QVncDirtyMapOptimized() {}
 
     void setDirty(int x, int y, bool force = false) override;

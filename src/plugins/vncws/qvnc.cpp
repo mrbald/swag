@@ -61,24 +61,25 @@
 #endif
 
 #include <QtCore/QDebug>
+#include <new>
 
 QT_BEGIN_NAMESPACE
 
 Q_LOGGING_CATEGORY(lcVnc, "qt.qpa.vnc");
 
-QVncDirtyMap::QVncDirtyMap(QVncScreen *screen)
-    : screen(screen), bytesPerPixel(0), numDirty(0)
+QVncDirtyMap::QVncDirtyMap(QVncScreen *screen, const QSize &size)
+    : screen(screen), bytesPerPixel(0), numDirty(0), map(nullptr), buffer(nullptr)
 {
     bytesPerPixel = (screen->depth() + 7) / 8;
-    bufferWidth = screen->geometry().width();
-    bufferHeight = screen->geometry().height();
+    bufferWidth = size.width();
+    bufferHeight = size.height();
     bufferStride = bufferWidth * bytesPerPixel;
-    buffer = new uchar[bufferHeight * bufferStride];
+    buffer = new (std::nothrow) uchar[bufferHeight * bufferStride];
 
     mapWidth = (bufferWidth + MAP_TILE_SIZE - 1) / MAP_TILE_SIZE;
     mapHeight = (bufferHeight + MAP_TILE_SIZE - 1) / MAP_TILE_SIZE;
     numTiles = mapWidth * mapHeight;
-    map = new uchar[numTiles];
+    map = new (std::nothrow) uchar[numTiles];
 }
 
 QVncDirtyMap::~QVncDirtyMap()

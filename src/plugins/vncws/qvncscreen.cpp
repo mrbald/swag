@@ -44,6 +44,8 @@
 
 #include <QtGui/QPainter>
 #include <QtGui/QScreen>
+#include <new>
+#include <utility>
 
 
 QT_BEGIN_NAMESPACE
@@ -72,13 +74,13 @@ bool QVncScreen::initialize()
 
     switch (depth()) {
     case 32:
-        dirty = new QVncDirtyMapOptimized<quint32>(this);
+        dirty = new QVncDirtyMapOptimized<quint32>(this, mSize);
         break;
     case 16:
-        dirty = new QVncDirtyMapOptimized<quint16>(this);
+        dirty = new QVncDirtyMapOptimized<quint16>(this, mSize);
         break;
     case 8:
-        dirty = new QVncDirtyMapOptimized<quint8>(this);
+        dirty = new QVncDirtyMapOptimized<quint8>(this, mSize);
         break;
     default:
         qWarning("QVNCScreen::initDevice: No support for screen depth %d",
@@ -87,8 +89,44 @@ bool QVncScreen::initialize()
         return false;
     }
 
+    if (!dirty || !dirty->isValid() || mScreenImage.isNull())
+        return false;
+
     setPowerState(PowerStateOff);
 
+    return true;
+}
+
+bool QVncScreen::resizeScreen(const QSize &size)
+{
+    if (size == mSize)
+        return true;
+
+    // Allocate everything that depends on size before changing the Qt screen.
+    QImage image(size, mFormat);
+    if (image.isNull())
+        return false;
+    image.fill(Qt::transparent);
+    auto *newDirty = new (std::nothrow) QVncDirtyMapOptimized<quint32>(this, size);
+    if (!newDirty || !newDirty->isValid()) {
+        delete newDirty;
+        return false;
+    }
+    newDirty->reset();
+
+    auto *oldDirty = dirty;
+    dirty = newDirty;
+    mSize = size;
+    mPhysicalSize = QSizeF(size.width()/96.*25.4, size.height()/96.*25.4);
+    // QFbScreen also drops its painter and notifies Qt of the new geometry.
+    QFbScreen::setGeometry(QRect(QPoint(0, 0), size));
+    mScreenImage = std::move(image);
+    mRepaintRegion = QRegion();
+    dirtyRegion = QRegion();
+    delete oldDirty;
+
+    setDirty(mGeometry);
+    doRedraw();
     return true;
 }
 

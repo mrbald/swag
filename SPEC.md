@@ -11,6 +11,12 @@ VM, probably hosted in Azure (hosting unconfirmed). Exact Linux architecture,
 Qt package versions and compatibility of the actual client application remain
 qualification inputs; the current plugin requires Qt 5.15.
 
+Delivery uses the client's RPM workflow: commit plugin sources alongside the
+application, build with its Qt/toolchain, and include the plugin in the application
+RPM. The user owns the separate standard infrastructure package and site-specific
+NGINX/OAuth2 Proxy setup. Containers here are a deployable-behavior test harness;
+manufacturing RPMs or a production infrastructure installer is outside this work.
+
 One shared service account hosts strictly zero or one Qt GUI process per user.
 Usernames are stable, short, unique within the configured identity realm, and
 alphanumeric. The authenticated proxy supplies identity; the session manager binds
@@ -83,6 +89,15 @@ metadata and bridges authenticated binary WebSockets. No additional public viewe
 port or plugin-side identity/authentication is introduced. The experimental mode
 requires MDI without an external window manager and keeps a fixed 1280x800 screen;
 the TigerVNC resize qualification does not apply to it.
+
+The approved next increment adds bounded single-screen remote resizing and
+negotiated Unicode text clipboard support to the Qt WebSocket plugin. Preserve
+ordinary Qt application behavior, current process identity, unsaved MDI forms,
+input/focus and takeover while exercising real noVNC input. Then measure the
+existing deployment path under explicit network profiles, recording bandwidth,
+input/visual responsiveness, resource use and failures before selecting further
+compression or pacing work. Keep TigerVNC as the fallback and commit verified
+checkpoints. Production packaging and site configuration remain with the user.
 
 # Authenticated topology and bank mock
 

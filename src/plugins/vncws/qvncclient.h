@@ -62,7 +62,8 @@ public:
         FramebufferUpdateRequest = 3,
         KeyEvent = 4,
         PointerEvent = 5,
-        ClientCutText = 6
+        ClientCutText = 6,
+        SetDesktopSize = 251
     };
 
     explicit QVncClient(QIODevice *clientSocket, QVncServer *server);
@@ -109,11 +110,13 @@ private:
 
     void releaseInput();
     void sendEmptyUpdate();
+    void sendExtendedDesktopSize(quint16 reason, quint16 status);
     void initializePixelFormat(const QRfbPixelFormat &format);
     bool validPixelFormat(const QRfbPixelFormat &format) const;
     void setPixelFormat();
     void setEncodings();
     void frameBufferUpdateRequest();
+    void setDesktopSize();
     void pointerEvent();
     void keyEvent();
     void clientCutText();
@@ -140,6 +143,7 @@ private:
     uint m_supportCursor : 1;
     uint m_supportDesktopSize : 1;
     bool m_wantUpdate;
+    bool m_sentDesktopSize = false;
     Qt::KeyboardModifiers m_keymod;
     Qt::MouseButtons m_buttonState = Qt::NoButton;
     QPointF m_lastPointerPos;

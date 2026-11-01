@@ -60,6 +60,7 @@ public:
     ~QVncScreen();
 
     bool initialize() override;
+    bool resizeScreen(const QSize &size);
 
     QPixmap grabWindow(WId wid, int x, int y, int width, int height) const override;
 
@@ -84,6 +85,8 @@ public:
     QRegion dirtyRegion;
     int refreshRate = 30;
     QVncServer *vncServer = nullptr;
+    quint32 screenId = 0;
+    quint32 screenFlags = 0;
 #if QT_CONFIG(cursor)
     QVncClientCursor *clientCursor = nullptr;
 #endif

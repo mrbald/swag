@@ -7,6 +7,12 @@ platform-support libraries, pkg-config and libxkbcommon. It does not build SWAG
 or require SWAG's GCC 15/C++23 configuration. See the plugin README for EL8
 package names and the preserved upstream/SWAG license boundaries.
 
+For the client's deployment, these sources live alongside the application and the
+built plugin ships in its RPM. The user owns the separate infrastructure package
+and site-specific NGINX/OAuth2 Proxy configuration. The container commands below
+exercise equivalent application, process and proxy boundaries; they do not require
+a container-based production deployment. RPM manufacturing is outside this work.
+
 ```sh
 cmake -S vncws -B vncws-build -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_PREFIX_PATH=/path/to/client/qt
@@ -32,8 +38,8 @@ to the correct private session endpoint; identity in an environment variable is
 not a viewer access control. Existing open-connection revocation is an explicit
 deployment policy.
 
-Current limits: Qt 5.15/Linux raster widgets; one viewer with takeover; fixed
-screen (64..2048 per dimension, at most 2,073,600 pixels); 32-bit framebuffer;
+Current limits: Qt 5.15/Linux raster widgets; one viewer with takeover; one
+resizable screen (64..2048 per dimension, at most 2,073,600 pixels); 32-bit framebuffer;
 RFB 3.3 with little-endian RGB888 in either tested channel order; Raw encoding;
 Latin-1 clipboard. The RFB handshake deadline is 10 seconds. Input messages/queue
 are capped at 1 MiB, output queue at 16 MiB, encoding hints and distinct held
@@ -101,8 +107,11 @@ select a host or port. The manager relays binary WebSocket data to Qt while
 retaining Origin checks, viewer leases and takeover. No viewer port is published
 from the application container. Qt is the only GUI child: no Xvnc, Openbox or
 vncconfig. This remains shared-UID process ownership, not OS isolation between
-users. The new renderer keeps a fixed 1280x800 framebuffer with browser scaling;
-TigerVNC's dynamic remote resize is not available in this mode.
+users. The renderer starts at 1280x800 and negotiates remote resizing with noVNC.
+The Qt screen and application resize to the browser without replacing the process.
+Below the browser shell's usable-size threshold, or above the plugin's size cap,
+the existing framebuffer is scaled locally. Unsupported layouts are rejected
+without disconnecting the viewer.
 
 On 2026-11-01 the Qt WebSocket application path passed 10 MDI, 11 two-user
 workspace, 5 login-recovery and 8 Linux-ownership checks, plus 22 focused Python
@@ -115,6 +124,18 @@ match the reviewed sources. Evidence is under `artifacts/qt-ws-mdi/`, including
 `image-proof.json`, screenshots and per-suite results/logs.
 The same 10 MDI checks also passed on the TigerVNC fallback, using that identical
 Qt executable; see `artifacts/qt-ws-mdi/tiger-mdi/`.
+
+The subsequent autoresize gate passed 10 independent resize protocol cases and
+8 authenticated browser cases, including rapid resize, rejected oversize requests,
+small-window scaling, open dialogs, dirty forms, reconnect and viewer takeover.
+The original MDI suite passed 10 checks and existing protocol regressions passed
+26 checks. Evidence: `artifacts/qt-ws-resize/`. Reproduce the new gates with:
+
+```sh
+.venv/bin/python tests/vncws_resize.py --port 6114
+.venv/bin/python tests/browser/resize.py --render-backend qt-ws \
+  --output artifacts/qt-ws-resize/browser
+```
 
 The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
 The browser client is understood to be Chrome on a Windows VM, probably in Azure;
@@ -136,6 +157,6 @@ the actual browser-to-server network path and Windows display scaling/keyboard
 behavior. If the Windows VM is accessed through remote desktop, also check its
 additional clipboard and keyboard path.
 
-Native X11 handles, OpenGL/Qt Quick/WebEngine, IME, dynamic resizing, Unicode
+Native X11 handles, OpenGL/Qt Quick/WebEngine, IME, Unicode
 clipboard and WAN/concurrency envelopes are not qualified. TigerVNC remains the
 default and fallback renderer.

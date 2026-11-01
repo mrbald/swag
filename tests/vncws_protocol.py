@@ -42,7 +42,7 @@ class Rfb:
         del self.buffer[:size]
         return value
 
-    async def init(self, fragmented=False, combined=b''):
+    async def init(self, fragmented=False, combined=b'', expected_size=(1280, 800)):
         assert await self.read(12) == b'RFB 003.003\n'
         banner = b'RFB 003.003\n'
         if fragmented:
@@ -56,7 +56,9 @@ class Rfb:
             await self.ws.send_bytes(b'\x01')
         header = await self.read(24)
         width, height = struct.unpack('>HH', header[:4])
-        assert (width, height) == (1280, 800), (width, height)
+        self.size = (width, height)
+        if expected_size is not None:
+            assert self.size == expected_size, self.size
         name_size = struct.unpack('>I', header[20:24])[0]
         assert name_size < 4096
         await self.read(name_size)
@@ -247,11 +249,11 @@ async def checks(url, output):
     return results
 
 
-def main():
+def main(checks_fn=checks, default_output=ROOT/'artifacts/qt-ws-hardening/protocol'):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--engine', default='podman')
     parser.add_argument('--port', type=int, default=6102)
-    parser.add_argument('--output', type=Path, default=ROOT/'artifacts/qt-ws-hardening/protocol')
+    parser.add_argument('--output', type=Path, default=default_output)
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -271,7 +273,7 @@ def main():
             time.sleep(.1)
         else:
             raise TimeoutError('probe readiness')
-        results = asyncio.run(checks(f'http://127.0.0.1:{args.port+1}/websockify', output))
+        results = asyncio.run(checks_fn(f'http://127.0.0.1:{args.port+1}/websockify', output))
         return int(any(r['status'] != 'pass' for r in results))
     finally:
         result = command(args.engine, 'logs', name, check=False)

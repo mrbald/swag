@@ -43,6 +43,7 @@
 #include "qvncwebsocketstream.h"
 #include <QtCore/QIODevice>
 #include <QtCore/QCoreApplication>
+#include <QtCore/QtEndian>
 
 #include <qpa/qwindowsysteminterface.h>
 #include <QtGui/qguiapplication.h>
@@ -347,6 +348,9 @@ void QVncClient::readClient()
         case ClientCutText:
             clientCutText();
             break;
+        case SetDesktopSize:
+            setDesktopSize();
+            break;
         default:
             qWarning("vncws: unsupported RFB message type %u", unsigned(m_msgType));
             close();
@@ -424,6 +428,32 @@ void QVncClient::sendEmptyUpdate()
     m_clientSocket->write(header, sizeof(header));
 }
 
+void QVncClient::sendExtendedDesktopSize(quint16 reason, quint16 status)
+{
+    // A pseudo-rectangle must be the only rectangle in this update.
+    char update[36] = {};
+    const auto put16 = [&update](int offset, quint16 value) {
+        qToBigEndian(value, reinterpret_cast<uchar *>(update + offset));
+    };
+    const auto put32 = [&update](int offset, quint32 value) {
+        qToBigEndian(value, reinterpret_cast<uchar *>(update + offset));
+    };
+    const QVncScreen *screen = m_server->screen();
+    const QSize size = screen->geometry().size();
+    put16(2, 1);                    // one rectangle
+    put16(4, reason);
+    put16(6, status);
+    put16(8, quint16(size.width()));
+    put16(10, quint16(size.height()));
+    put32(12, quint32(-308));      // ExtendedDesktopSize
+    update[16] = 1;                // one screen
+    put32(20, screen->screenId);
+    put16(28, quint16(size.width()));
+    put16(30, quint16(size.height()));
+    put32(32, screen->screenFlags);
+    m_clientSocket->write(update, sizeof(update));
+}
+
 void QVncClient::scheduleUpdate()
 {
     if (!m_updatePending) {
@@ -476,12 +506,15 @@ void QVncClient::setEncodings()
         return;
 
     bool wantsCursor = false;
+    bool wantsDesktopSize = false;
     for (int i = 0; i < m_encodingsPending; ++i) {
         qint32 encoding;
         m_clientSocket->read(reinterpret_cast<char *>(&encoding), sizeof(encoding));
         encoding = qint32(ntohl(quint32(encoding)));
         if (encoding == -239) // Cursor pseudo-encoding.
             wantsCursor = true;
+        if (encoding == -308) // ExtendedDesktopSize pseudo-encoding.
+            wantsDesktopSize = true;
         // Other entries are preference hints. Raw is mandatory in RFB.
     }
     if (wantsCursor && !m_supportCursor)
@@ -491,6 +524,9 @@ void QVncClient::setEncodings()
         m_dirtyCursor = false;
     }
     m_supportCursor = wantsCursor;
+    m_supportDesktopSize = wantsDesktopSize;
+    if (!wantsDesktopSize)
+        m_sentDesktopSize = false;
     m_encodingsPending = -1;
     m_handleMsg = false;
 }
@@ -504,6 +540,17 @@ void QVncClient::frameBufferUpdateRequest()
         if (ev.incremental != 0 && ev.incremental != 1) {
             qWarning("vncws: invalid FramebufferUpdateRequest incremental flag");
             close();
+            return;
+        }
+        if (!ev.incremental && m_supportDesktopSize) {
+            // The layout reply completes this request; pixels follow a later
+            // request, after the client has processed the descriptor.
+            sendExtendedDesktopSize(0, 0);
+            m_sentDesktopSize = true;
+            m_dirtyRegion = m_server->screen()->geometry();
+            m_requestRect = m_server->screen()->geometry();
+            m_wantUpdate = false;
+            m_handleMsg = false;
             return;
         }
         m_requestRect = QRect(ev.rect.x, ev.rect.y, ev.rect.w, ev.rect.h)
@@ -521,6 +568,53 @@ void QVncClient::frameBufferUpdateRequest()
         checkUpdate();
         m_handleMsg = false;
     }
+}
+
+void QVncClient::setDesktopSize()
+{
+    if (!m_supportDesktopSize || !m_sentDesktopSize) {
+        qWarning("vncws: SetDesktopSize without ExtendedDesktopSize negotiation");
+        close();
+        return;
+    }
+
+    // The seven-byte header contains a bounded screen count. Do not consume
+    // any part of a fragmented request until all screen records have arrived.
+    if (m_clientSocket->bytesAvailable() < 7)
+        return;
+    const QByteArray header = m_clientSocket->peek(7);
+    const int count = quint8(header[5]);
+    const int length = 7 + 16 * count;
+    if (m_clientSocket->bytesAvailable() < length)
+        return;
+    const QByteArray message = m_clientSocket->read(length);
+    const auto get16 = [&message](int offset) {
+        return qFromBigEndian<quint16>(reinterpret_cast<const uchar *>(message.constData() + offset));
+    };
+    const auto get32 = [&message](int offset) {
+        return qFromBigEndian<quint32>(reinterpret_cast<const uchar *>(message.constData() + offset));
+    };
+    const int width = get16(1);
+    const int height = get16(3);
+    const bool validSize = width >= 64 && width <= 2048 &&
+                           height >= 64 && height <= 2048 &&
+                           qint64(width) * height <= 2073600;
+    const bool validLayout = count == 1 &&
+                             get32(7) == m_server->screen()->screenId &&
+                             get16(11) == 0 && get16(13) == 0 &&
+                             get16(15) == width && get16(17) == height;
+    if (!validSize || !validLayout) {
+        sendExtendedDesktopSize(1, 3); // invalid screen layout
+    } else if (!m_server->screen()->resizeScreen(QSize(width, height))) {
+        sendExtendedDesktopSize(1, 2); // out of resources
+    } else {
+        m_server->screen()->screenFlags = get32(19);
+        m_requestRect = m_server->screen()->geometry();
+        m_dirtyRegion = m_requestRect;
+        m_wantUpdate = false;
+        sendExtendedDesktopSize(1, 0);
+    }
+    m_handleMsg = false;
 }
 
 void QVncClient::pointerEvent()

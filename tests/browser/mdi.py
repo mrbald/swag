@@ -91,7 +91,8 @@ def main():
             if args.render_backend == "qt-ws":
                 assert set(launcher["helpers"]) == {"qt"}, launcher
                 assert not {"Xvnc", "vncconfig", "websockify"}.intersection(s.strip() for s in processes)
-                assert actor.framebuffer_size() == [1280, 800]
+                workspace.wait_for(lambda: actor.framebuffer_size() == actor.page.locator("#screen").evaluate(
+                    "e => [Math.floor(e.clientWidth), Math.floor(e.clientHeight)]"))
             owned = suite.processes()["alice"]
             assert len(owned) == 1 and owned[0]["uid"] == 1000 and owned[0]["pid"] == actor.session["pid"]
             assert len(windows()) == 1

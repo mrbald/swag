@@ -1,10 +1,11 @@
 #!/usr/bin/env python3.12
-"""Check browser-sized Xvnc/Qt geometry without losing live desktop state."""
+"""Check browser-sized Qt geometry without losing live desktop state."""
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
+import re
 
 from playwright.sync_api import sync_playwright
 
@@ -16,9 +17,11 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", default="http://localhost:6081")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger")
     args = parser.parse_args()
     results, current = [], "initial_connect_fills_canvas"
-    output = ROOT / "artifacts/resize-check"
+    output = args.output or ROOT / "artifacts/resize-check"
     output.mkdir(parents=True, exist_ok=True)
     workspace.OUTPUT = output
     with sync_playwright() as p:
@@ -31,13 +34,17 @@ def main():
             actor.page.reload(wait_until="domcontentloaded")
             actor.connected()
             mode = actor.state()["ui_mode"]
-            output = ROOT / f"artifacts/resize-{mode}-check"
+            output = args.output or ROOT / f"artifacts/resize-{mode}-check"
             output.mkdir(parents=True, exist_ok=True)
             workspace.OUTPUT = output
             identity = (actor.session["pid"], actor.session["generation"])
+            manifest = json.loads((workspace.STACK / "workspaces/users/alice" /
+                                   actor.session["generation"] / "launcher.json").read_text())
+            assert manifest["render_backend"] == args.render_backend
 
             def save():
-                (output / "results.json").write_text(json.dumps({"ui_mode": mode, "checks": results}, indent=2)+"\n")
+                (output / "results.json").write_text(json.dumps({"ui_mode": mode,
+                    "render_backend": args.render_backend, "checks": results}, indent=2)+"\n")
 
             def passed(**details):
                 results.append({"check": current, "status": "pass", **details})
@@ -104,6 +111,24 @@ def main():
             actor.screenshot("resized-desktop")
             passed(sizes=measured, frame_count=len(original_forms), same_process=True)
 
+            current = "rapid_resize_preserves_final_geometry"
+            for width, height in ((1200,900),(1600,1000),(1100,850),(1440,1040)):
+                actor.page.set_viewport_size({"width":width,"height":height})
+                actor.page.wait_for_timeout(80)
+            passed(framebuffer=fitted(), same_process=True)
+            retained()
+
+            if args.render_backend == "qt-ws":
+                current = "oversize_request_retains_display_and_recovers"
+                previous = actor.framebuffer_size()
+                actor.page.set_viewport_size({"width":2400,"height":1200})
+                actor.page.wait_for_timeout(1000)
+                assert actor.framebuffer_size() == previous
+                assert actor.page.locator("#status").inner_text() == "Connected"
+                retained()
+                actor.page.set_viewport_size({"width":1440,"height":1040})
+                passed(framebuffer=fitted(), rejected_size=[2400,1200], same_process=True)
+
             current = "small_browser_scales_full_desktop"
             previous_size = actor.framebuffer_size()
 
@@ -126,7 +151,7 @@ def main():
                 retained()
             actor.page.goto("about:blank")
             actor.page.goto(args.origin, wait_until="domcontentloaded")
-            actor.page.locator("#status").filter(has_text="Connected").wait_for(timeout=20000)
+            actor.page.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for(timeout=20000)
             workspace.wait_for(scaled, 10)
             retained()
             actor.screenshot("small-browser-whole-desktop")
@@ -152,7 +177,7 @@ def main():
             actor.page.goto("about:blank")
             actor.page.set_viewport_size({"width": 1680, "height": 1100})
             actor.page.goto(args.origin, wait_until="domcontentloaded")
-            actor.page.locator("#status").filter(has_text="Connected").wait_for(timeout=20000)
+            actor.page.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for(timeout=20000)
             size = fitted()
             retained()
             passed(framebuffer=size, same_process=True, all_forms_retained=True)
@@ -162,7 +187,7 @@ def main():
             actor.page = actor.context.new_page()
             actor.page.set_viewport_size({"width": 1320, "height": 960})
             actor.page.goto(args.origin, wait_until="domcontentloaded")
-            actor.page.locator("#status").filter(has_text="Connected").wait_for(timeout=20000)
+            actor.page.locator("#status").filter(has_text=re.compile(r"^Connected$")).wait_for(timeout=20000)
             old_page.locator("#status").filter(has_text="Viewer disconnected").wait_for()
             size = fitted()
             retained()

@@ -41,6 +41,13 @@ little-endian true color with 8-bit red/green/blue channels and shifts either
 16/8/0 or 0/8/16. The latter is noVNC's default and is converted before
 encoding.
 
+Clients advertising ExtendedDesktopSize (`-308`) receive a one-screen layout
+descriptor in response to each nonincremental framebuffer request. A
+SetDesktopSize (`251`) request can resize that screen within the same size
+limits as startup. Unsupported dimensions or screen layouts receive an RFB
+status reply without disconnecting. The Qt process and its windows remain in
+place; framebuffer pixels are still sent with Raw encoding.
+
 The files `main.cpp`, `qvnc.cpp`, `qvnc_p.h`, `qvncclient.cpp`,
 `qvncclient.h`, `qvncintegration.cpp`, `qvncintegration.h`,
 `qvncscreen.cpp`, `qvncscreen.h`, and `vnc.json` began from the official
