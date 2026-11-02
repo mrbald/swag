@@ -13,7 +13,8 @@ import subprocess
 import sys
 import time
 
-from .processes import exclusive_lock, group_alive, parent_death_signal
+from .processes import (QT_WS_LISTEN_FD, exclusive_lock, group_alive,
+                        parent_death_signal, reserve_ws_listener)
 
 
 def resolve_render_backend(environment: Mapping[str, str]) -> str:
@@ -80,11 +81,21 @@ def reserve_display(runtime: Path) -> tuple[int, int]:
     raise RuntimeError("no free X display")
 
 
-def reserve_ws_listener() -> socket.socket:
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def workspace_ws_listener() -> socket.socket:
+    """Adopt the manager's reservation, or reserve one for a standalone launch."""
+    inherited = os.environ.pop(QT_WS_LISTEN_FD, None)
+    if inherited is None:
+        return reserve_ws_listener()
+    descriptor = int(inherited)
+    if descriptor < 3:
+        raise ValueError("invalid inherited Qt WebSocket listener")
+    listener = socket.socket(fileno=descriptor)
     try:
-        listener.bind(("127.0.0.1", 0))
-        listener.listen(16)
+        if (listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM
+                or listener.getsockname()[0] != "127.0.0.1"
+                or (sys.platform == "linux" and not listener.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_ACCEPTCONN))):
+            raise ValueError("inherited Qt WebSocket listener must listen on IPv4 loopback")
         return listener
     except BaseException:
         listener.close()
@@ -169,6 +180,7 @@ def main() -> int:
         os.environ["SWAG_UI_MODE"] = ui_mode
         os.environ["SWAG_RENDER_BACKEND"] = render_backend
         if render_backend == "tiger":
+            os.environ.pop(QT_WS_LISTEN_FD, None)
             display, display_lock = reserve_display(runtime)
             locks.append(display_lock)
             metadata["display"] = display
@@ -188,7 +200,7 @@ def main() -> int:
             app = launch("qt", ["/opt/swag/bin/swag-desktop"])
         else:
             os.environ.pop("DISPLAY", None)
-            ws_listener = reserve_ws_listener()
+            ws_listener = workspace_ws_listener()
             metadata["ws_port"] = ws_listener.getsockname()[1]
             os.environ["QT_QPA_PLATFORM"] = (
                 f"vncws:size=1280x800:fd={ws_listener.fileno()}")

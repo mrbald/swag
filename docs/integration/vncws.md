@@ -101,15 +101,27 @@ existing workspaces; bank data persists. To return to TigerVNC, run
 `python3.12 tools/app.py up --ui-mode mdi`.
 
 `SWAG_RENDER_BACKEND=qt-ws` requires MDI mode without an external window manager.
-The launcher reserves a loopback listening socket, passes its descriptor through
-the existing child-process trampoline, and gives Qt `vncws:fd=N`. Qt adopts that
-listener; the parent closes its copy. The descriptor option excludes `addr` and
+The manager reserves a loopback listening socket for each workspace generation,
+passes it to the launcher using `SWAG_QT_WS_LISTEN_FD` and an inherited descriptor,
+and retains its own copy until generation teardown. The launcher passes the
+descriptor through the existing child-process trampoline and gives Qt
+`vncws:fd=N`, then closes its copy. Qt adopts the listener; only Qt accepts
+connections. The descriptor option excludes `addr` and
 `port`, and requires a listening IPv4 TCP socket bound to `127.0.0.1`.
 
-The manager resolves the internal port from the ready manifest matching the
-authenticated user's current generation and launcher/Qt PIDs. The browser cannot
+The manager checks the ready manifest against the authenticated user's current
+generation, launcher/Qt PIDs and reserved port. It holds the workspace lock through
+viewer connection and reservation release, so a Qt exit cannot let another
+workspace reuse the port between validation and connection. A standalone launcher
+without the inherited descriptor still reserves its own listener; a custom
+supervisor must provide equivalent endpoint ownership for authenticated routing.
+The browser cannot
 select a host or port. The manager relays binary WebSocket data to Qt while
-retaining Origin checks, viewer leases and takeover. No viewer port is published
+retaining Origin checks, browser heartbeats, viewer leases and takeover. The private
+Qt connection has no heartbeat timeout: a temporarily blocked GUI thread can resume
+without losing its viewer. Process exit still closes the connection and ends the
+workspace. New connections retain the bounded startup/upgrade timeout.
+No viewer port is published
 from the application container. Qt is the only GUI child: no Xvnc, Openbox or
 vncconfig. This remains shared-UID process ownership, not OS isolation between
 users. The renderer starts at 1280x800 and negotiates remote resizing with noVNC.
@@ -310,6 +322,44 @@ Evidence: `artifacts/qt-ws-latency/verified-summary.json`, `comparison.json`,
 `network-final/results.json`, `baseline-frame-timing.json`, `baseline/`, `nodelay/`
 and `image-proof.json`. The retained pre-change image is
 `localhost/swag-app-ws:compressed-baseline`.
+
+## Review fixes: input ordering and endpoint ownership
+
+The Opus 5.5 review identified four actionable defects, independently reproduced
+before correction. Mouse and wheel events now use modifiers derived from held RFB
+keys, including overlapping left/right modifiers, instead of Qt's delayed event
+state. Horizontal wheel signs now match Qt's xcb convention.
+
+The manager retains a listening descriptor per generation through viewer admission
+and teardown. Regression checks close the renderer while leaving stale ready
+metadata, pause the connection after validation, and attempt a real replacement
+bind. They also cover failed launches and repeated cancellation during spawn,
+child reaping and viewer teardown. The private Qt heartbeat is removed while the
+browser heartbeat and leases remain. An authenticated Chrome viewer survived a
+20.28-second Qt process pause, retained its original MDI frame and opened another
+frame through real noVNC input after resuming.
+
+The focused gate passed 42 Python tests on both the development host and EL8,
+7 input wire checks, 26 protocol checks, 15 Chrome probe checks on each of qt-ws
+and Tiger, 10 original MDI checks, 8 resize/takeover checks and 8 Linux ownership
+checks, plus the authenticated GUI-stall check. The probe executable and noVNC
+client are identical between renderers. The original MDI application executable
+and noVNC client also match the pre-fix image. Standalone plugin and application
+image builds passed. Evidence: `artifacts/qt-ws-review-fixes/`.
+
+Initial diagnostic runs are retained separately: two wire assertions read a
+transient event label overwritten by a later scroll notification; the horizontal
+browser test initially tracked a cell omitted from observation when off-screen.
+The final tests use retained wheel modifiers and the current cell's geometry.
+Tiger's color assertion allows an eight-level per-channel tolerance for its lossy
+encoding while still rejecting swapped channels; qt-ws retains exact RGB checks.
+A container-runtime mount failure occurred before one browser fixture started.
+None of these initial runs count as passing evidence.
+
+Cursor/pixel update batching and friendlier oversized-clipboard rejection remain
+optional improvements. The previously measured WAN tradeoff is unchanged as
+historical evidence; these fixes did not include a new network benchmark or
+expand the client qualification claims.
 
 ## Client qualification
 

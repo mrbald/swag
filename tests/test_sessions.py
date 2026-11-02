@@ -6,22 +6,27 @@ These tests do not claim Qt/Xvnc or browser acceptance; those require the image.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+import errno
 import json
 import os
 from pathlib import Path
 import signal
+import socket
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from aiohttp import WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
 
-from swag_session.server import Config, SessionManager, Viewer, create_app
+from swag_session import server as session_server
+from swag_session.server import Config, SessionError, SessionManager, Viewer, create_app
 
 
 FAKE_LAUNCHER = r'''
-import asyncio, fcntl, json, os, pathlib, signal
+import asyncio, fcntl, json, os, pathlib, signal, socket
 from aiohttp import WSMsgType, web
 
 async def main():
@@ -51,23 +56,31 @@ async def main():
     backend = os.environ.get('SWAG_RENDER_BACKEND', 'tiger')
     server = None
     runner = None
+    site = None
     ws_port = None
     if backend == 'tiger':
         server = await asyncio.start_unix_server(echo, path=str(runtime / 'rfb.sock'))
     else:
         async def echo_ws(request):
-            ws = web.WebSocketResponse(max_msg_size=16 * 1024 * 1024)
+            if (artifact / 'reject-websocket').exists():
+                raise web.HTTPForbidden()
+            ws = web.WebSocketResponse(max_msg_size=16 * 1024 * 1024, autoping=False)
             await ws.prepare(request)
             await ws.send_bytes(b'RFB hello')
             async for message in ws:
                 if message.type == WSMsgType.BINARY:
                     await ws.send_bytes(message.data)
+                elif message.type == WSMsgType.PING:
+                    (artifact / 'renderer-ping').touch()
+                    if not (artifact / 'withhold-pong').exists():
+                        await ws.pong(message.data)
             return ws
         app = web.Application()
         app.router.add_get('/', echo_ws)
         runner = web.AppRunner(app)
         await runner.setup()
-        site = web.TCPSite(runner, '127.0.0.1', 0)
+        listener = socket.socket(fileno=int(os.environ.pop('SWAG_QT_WS_LISTEN_FD')))
+        site = web.SockSite(runner, listener)
         await site.start()
         ws_port = site._server.sockets[0].getsockname()[1]
     manifest = artifact / 'launcher.json'
@@ -82,7 +95,15 @@ async def main():
     end = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, end.set)
-    await end.wait()
+    while not end.is_set():
+        if site is not None and (artifact / 'close-renderer').exists():
+            await site.stop()
+            site = None
+            (artifact / 'renderer-closed').touch()
+        try:
+            await asyncio.wait_for(end.wait(), .02)
+        except TimeoutError:
+            pass
     for writer in connections.copy():
         writer.close()
     if server is not None:
@@ -333,6 +354,28 @@ class QtWsSessions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200, await response.text())
         return await response.json()
 
+    def artifacts(self, session):
+        return self.root / "a" / "users" / "alice" / session["generation"]
+
+    async def close_renderer(self, session):
+        artifacts = self.artifacts(session)
+        (artifacts / "close-renderer").touch()
+        async with asyncio.timeout(2):
+            while not (artifacts / "renderer-closed").exists():
+                await asyncio.sleep(0.01)
+        # The fixture deliberately keeps its launcher alive and ready metadata stale.
+        self.assertTrue(json.loads((artifacts / "launcher.json").read_text())["ready"])
+
+    def assert_reserved(self, port):
+        with socket.socket() as replacement:
+            with self.assertRaises(OSError) as occupied:
+                replacement.bind(("127.0.0.1", port))
+            self.assertEqual(occupied.exception.errno, errno.EADDRINUSE)
+
+    def assert_released(self, port):
+        with socket.socket() as replacement:
+            replacement.bind(("127.0.0.1", port))
+
     async def test_binary_relay_takeover_and_manifest_identity(self):
         session = await self.start()
         manifest = self.root / "a" / "users" / "alice" / session["generation"] / "launcher.json"
@@ -360,7 +403,8 @@ class QtWsSessions(unittest.IsolatedAsyncioTestCase):
     async def test_nonobject_or_wrong_pid_manifest_cannot_select_endpoint(self):
         for mutate in (lambda _m: [],
                        lambda m: {**m, "app_pid": m["app_pid"] + 1000},
-                       lambda m: {**m, "ws_port": "5900"}):
+                       lambda m: {**m, "ws_port": "5900"},
+                       lambda m: {**m, "ws_port": m["ws_port"] % 65535 + 1}):
             session = await self.start()
             manifest = self.root / "a" / "users" / "alice" / session["generation"] / "launcher.json"
             manifest.write_text(json.dumps(mutate(json.loads(manifest.read_text()))))
@@ -372,25 +416,196 @@ class QtWsSessions(unittest.IsolatedAsyncioTestCase):
 
     async def test_inner_websocket_handshake_failure_maps_to_503(self):
         session = await self.start()
-        async def reject(reader, writer):
-            await reader.read(1024)
-            writer.write(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
-            await writer.drain()
-            writer.close()
-        server = await asyncio.start_server(reject, "127.0.0.1", 0)
-        try:
-            port = server.sockets[0].getsockname()[1]
-            manifest = self.root / "a" / "users" / "alice" / session["generation"] / "launcher.json"
-            metadata = json.loads(manifest.read_text())
-            metadata["ws_port"] = port
-            manifest.write_text(json.dumps(metadata))
+        (self.artifacts(session) / "reject-websocket").touch()
+        with self.assertRaises(WSServerHandshakeError) as denied:
+            await self.client.ws_connect(
+                f"/viewer/{session['generation']}/websockify", headers=self.headers())
+        self.assertEqual(denied.exception.status, 503)
+
+    async def test_stale_ready_manifest_cannot_reuse_closed_renderer_port(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        listener = workspace.ws_listener
+        port = listener.getsockname()[1]
+        await self.close_renderer(session)
+        self.assert_reserved(port)
+        with self.assertRaises(WSServerHandshakeError) as denied:
+            await self.client.ws_connect(
+                f"/viewer/{session['generation']}/websockify", headers=self.headers())
+        self.assertEqual(denied.exception.status, 503)
+        self.assert_reserved(port)
+        await self.manager.end(workspace)
+        self.assertEqual(listener.fileno(), -1)
+        self.assertIsNone(workspace.ws_listener)
+        self.assert_released(port)
+
+    async def test_reservation_survives_validation_to_connect_and_blocks_teardown(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        listener = workspace.ws_listener
+        port = listener.getsockname()[1]
+        entered, resume = asyncio.Event(), asyncio.Event()
+        original = session_server.ClientSession.ws_connect
+
+        async def delayed(client, *args, **kwargs):
+            entered.set()  # Endpoint validation has completed; no TCP dial yet.
+            await resume.wait()
+            return await original(client, *args, **kwargs)
+
+        with patch.object(session_server.ClientSession, "ws_connect", delayed):
+            # TestClient itself shares ClientSession; bypass its patched outer dial.
+            outer_client = self.client.session
+            outer_url = self.client.make_url(f"/viewer/{session['generation']}/websockify")
+            async def outer_connect():
+                return await original(outer_client, outer_url, headers=self.headers())
+            connecting = asyncio.create_task(outer_connect())
+            await asyncio.wait_for(entered.wait(), 2)
+            await self.close_renderer(session)
+            self.assert_reserved(port)
+            ending = asyncio.create_task(self.manager.end(workspace))
+            await asyncio.sleep(0.05)
+            self.assertFalse(ending.done())
+            self.assertEqual(listener.fileno(), workspace.ws_listener.fileno())
+            resume.set()
             with self.assertRaises(WSServerHandshakeError) as denied:
-                await self.client.ws_connect(
-                    f"/viewer/{session['generation']}/websockify", headers=self.headers())
+                await connecting
             self.assertEqual(denied.exception.status, 503)
+            await ending
+        self.assertIsNone(workspace.ws_listener)
+        self.assert_released(port)
+
+    async def test_manager_reservation_is_required_even_for_matching_manifest(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        async with workspace.lock:
+            workspace.ws_listener.close()
+            workspace.ws_listener = None
+        with self.assertRaises(WSServerHandshakeError) as denied:
+            await self.client.ws_connect(
+                f"/viewer/{session['generation']}/websockify", headers=self.headers())
+        self.assertEqual(denied.exception.status, 404)
+        self.assertEqual(workspace.state, "ended")
+
+    async def test_failed_start_timeout_and_next_generation_release_reservations(self):
+        workspace = self.manager.workspace("alice")
+        original_config = self.manager.config
+        original_reserve = session_server.reserve_ws_listener
+        listeners = []
+
+        def reserve():
+            listener = original_reserve()
+            listeners.append((listener, listener.getsockname()[1]))
+            return listener
+
+        for command in ((sys.executable, "-c", "raise SystemExit(7)"),
+                        (sys.executable, "-c", "import time; time.sleep(60)")):
+            with self.subTest(command=command):
+                self.manager.config = replace(original_config, start_timeout=0.15,
+                                              launcher_command=command)
+                with patch.object(session_server, "reserve_ws_listener", reserve):
+                    with self.assertRaises(SessionError) as failed:
+                        await self.manager.start(workspace)
+                self.assertEqual(failed.exception.status, 503)
+                self.assertEqual(workspace.state, "ended")
+                self.assertIsNotNone(workspace.process.returncode)
+                self.assertIsNone(workspace.ws_listener)
+                listener, port = listeners[-1]
+                self.assertEqual(listener.fileno(), -1)
+                self.assert_released(port)
+        failed_generation = workspace.generation
+        self.manager.config = original_config
+        session = await self.start()
+        self.assertNotEqual(session["generation"], failed_generation)
+        self.assertTrue(all(workspace.ws_listener is not item[0] for item in listeners))
+        port = workspace.ws_listener.getsockname()[1]
+        await self.manager.close()
+        self.assertIsNone(workspace.ws_listener)
+        self.assert_released(port)
+
+    async def test_repeated_cancellation_during_spawn_and_stop_preserves_ownership(self):
+        self.manager.config = replace(self.config, launcher_command=(
+            sys.executable, "-c", "import time; time.sleep(60)"))
+        workspace = self.manager.workspace("alice")
+        original_spawn = asyncio.create_subprocess_exec
+        entered, resume = asyncio.Event(), asyncio.Event()
+        stopping, finish_stop = asyncio.Event(), asyncio.Event()
+        children = []
+        original_stop = self.manager._stop
+
+        async def delayed_spawn(*args, **kwargs):
+            children.append(await original_spawn(*args, **kwargs))
+            entered.set()
+            await resume.wait()
+            return children[-1]
+
+        async def delayed_stop(process):
+            stopping.set()
+            await finish_stop.wait()
+            await original_stop(process)
+
+        with patch.object(asyncio, "create_subprocess_exec", delayed_spawn), \
+                patch.object(self.manager, "_stop", delayed_stop):
+            starting = asyncio.create_task(self.manager.start(workspace))
+            await asyncio.wait_for(entered.wait(), 2)
+            listener = workspace.ws_listener
+            port = listener.getsockname()[1]
+            starting.cancel()
+            await asyncio.sleep(0.05)
+            self.assertFalse(starting.done())
+            self.assert_reserved(port)
+            starting.cancel()  # Cleanup is awaiting the still-unreturned spawn.
+            await asyncio.sleep(0.05)
+            self.assertFalse(starting.done())
+            self.assert_reserved(port)
+            resume.set()
+            await asyncio.wait_for(stopping.wait(), 2)
+            starting.cancel()  # Cleanup is now awaiting child stop/reap.
+            await asyncio.sleep(0.05)
+            self.assertFalse(starting.done())
+            self.assert_reserved(port)
+            finish_stop.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await starting
+        self.assertIsNotNone(children[0].returncode)
+        self.assertEqual(listener.fileno(), -1)
+        self.assertIsNone(workspace.ws_listener)
+        self.assert_released(port)
+
+    async def test_renderer_without_pongs_survives_while_browser_heartbeat_continues(self):
+        self.manager.config = replace(self.config, lease_seconds=60)
+        session = await self.start()
+        artifacts = self.artifacts(session)
+        (artifacts / "withhold-pong").touch()
+        outer = await self.client.ws_connect(
+            f"/viewer/{session['generation']}/websockify", headers=self.headers(),
+            protocols=("binary",), autoping=False)
+        self.assertEqual((await outer.receive()).data, b"RFB hello")
+        pings, frames = [], asyncio.Queue()
+
+        async def browser():
+            async for message in outer:
+                if message.type == WSMsgType.PING:
+                    pings.append(message.data)
+                    await outer.pong(message.data)
+                else:
+                    await frames.put(message)
+
+        receiving = asyncio.create_task(browser())
+        try:
+            # The former private heartbeat closed an idle renderer after 10+5 s.
+            # The real manager/relay and aiohttp timers run for longer than that.
+            await asyncio.sleep(18.2)
+            self.assertFalse(outer.closed)
+            self.assertTrue(pings, "ordinary browser heartbeat must still run")
+            await outer.send_bytes(b"renderer recovered after delayed pong window")
+            reply = await asyncio.wait_for(frames.get(), 2)
+            self.assertEqual(reply.type, WSMsgType.BINARY)
+            self.assertEqual(reply.data, b"renderer recovered after delayed pong window")
+            self.assertFalse((artifacts / "renderer-ping").exists())
         finally:
-            server.close()
-            await server.wait_closed()
+            receiving.cancel()
+            await asyncio.gather(receiving, return_exceptions=True)
+            await outer.close()
 
     async def test_lease_expiry_closes_both_sockets_and_preserves_workspace(self):
         session = await self.start()
@@ -411,6 +626,57 @@ class QtWsSessions(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(viewer.client_session.closed)
         self.assertEqual(self.manager.workspace("alice").state, "running")
         self.assertEqual(self.manager.workspace("alice").pid, session["pid"])
+
+    async def test_end_closes_viewer_and_releases_reservation(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        listener = workspace.ws_listener
+        outer = await self.client.ws_connect(
+            f"/viewer/{session['generation']}/websockify", headers=self.headers())
+        await outer.receive()
+        viewer = workspace.viewer
+        await self.manager.end(workspace)
+        self.assertIn((await outer.receive()).type, (WSMsgType.CLOSE, WSMsgType.CLOSED))
+        self.assertTrue(viewer.upstream.closed)
+        self.assertTrue(viewer.client_session.closed)
+        self.assertIsNone(workspace.ws_listener)
+        self.assertEqual(listener.fileno(), -1)
+        # Established TCP connections may leave TIME_WAIT after release. The
+        # no-connection teardown tests independently prove immediate rebinding.
+
+    async def test_cancelled_end_finishes_viewer_close_and_child_reaping(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        listener = workspace.ws_listener
+        outer = await self.client.ws_connect(
+            f"/viewer/{session['generation']}/websockify", headers=self.headers())
+        await outer.receive()
+        viewer = workspace.viewer
+        entered, resume = asyncio.Event(), asyncio.Event()
+        original_close = viewer.close
+
+        async def delayed_close(*args, **kwargs):
+            entered.set()
+            await resume.wait()
+            await original_close(*args, **kwargs)
+
+        with patch.object(viewer, "close", delayed_close):
+            ending = asyncio.create_task(self.manager.end(workspace))
+            await asyncio.wait_for(entered.wait(), 2)
+            for _ in range(2):
+                ending.cancel()
+                await asyncio.sleep(0.05)
+                self.assertFalse(ending.done())
+                self.assertGreaterEqual(listener.fileno(), 0)
+                self.assertTrue(workspace.lock.locked())
+            resume.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await ending
+        self.assertIsNotNone(workspace.process.returncode)
+        self.assertIsNone(workspace.ws_listener)
+        self.assertEqual(listener.fileno(), -1)
+        self.assertTrue(viewer.upstream.closed)
+        self.assertTrue(viewer.client_session.closed)
 
 
 class ViewerCleanup(unittest.IsolatedAsyncioTestCase):

@@ -7,7 +7,23 @@ import fcntl
 import os
 from pathlib import Path
 import signal
+import socket
 import sys
+
+
+QT_WS_LISTEN_FD = "SWAG_QT_WS_LISTEN_FD"
+
+
+def reserve_ws_listener() -> socket.socket:
+    """Reserve a generation's loopback endpoint before its renderer is launched."""
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(16)
+        return listener
+    except BaseException:
+        listener.close()
+        raise
 
 
 def exclusive_lock(path: Path) -> int:

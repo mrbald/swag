@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import socket
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -143,6 +144,41 @@ class LauncherChildren(unittest.TestCase):
         self.assertTrue(1 <= manifest["ws_port"] <= 65535)
         with self.assertRaises(OSError):
             os.fstat(passed[0])  # Parent copy closed immediately after spawn.
+
+    def test_qt_ws_adopts_manager_listener_and_preserves_managers_copy(self):
+        with launcher.reserve_ws_listener() as reservation:
+            inherited = os.dup(reservation.fileno())
+            commands, manifest = self.launch_workspace({
+                "SWAG_UI_MODE": "mdi", "SWAG_RENDER_BACKEND": "qt-ws",
+                launcher.QT_WS_LISTEN_FD: str(inherited),
+            })
+            self.assertEqual(commands[0][2], (inherited,))
+            self.assertNotIn(launcher.QT_WS_LISTEN_FD, commands[0][1])
+            self.assertEqual(manifest["ws_port"], reservation.getsockname()[1])
+            with self.assertRaises(OSError):
+                os.fstat(inherited)
+            with socket.socket() as replacement:
+                with self.assertRaises(OSError):
+                    replacement.bind(reservation.getsockname())
+
+    def test_tiger_does_not_forward_inherited_qt_ws_descriptor_environment(self):
+        commands, _ = self.launch_workspace({launcher.QT_WS_LISTEN_FD: "999999"})
+        for _, environment, passed in commands:
+            self.assertNotIn(launcher.QT_WS_LISTEN_FD, environment)
+            self.assertEqual(passed, ())
+
+    def test_inherited_listener_rejects_unbound_or_non_loopback_socket(self):
+        for address in (None, ("0.0.0.0", 0)):
+            with self.subTest(address=address), socket.socket() as reservation:
+                if address is not None:
+                    reservation.bind(address)
+                    reservation.listen()
+                inherited = os.dup(reservation.fileno())
+                with patch.dict(os.environ, {launcher.QT_WS_LISTEN_FD: str(inherited)}):
+                    with self.assertRaises(ValueError):
+                        launcher.workspace_ws_listener()
+                with self.assertRaises(OSError):
+                    os.fstat(inherited)
 
 
 if __name__ == "__main__":

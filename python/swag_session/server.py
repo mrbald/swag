@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import secrets
 import signal
+import socket
 import sys
 import time
 from urllib.parse import urlsplit
@@ -16,7 +17,7 @@ import uuid
 
 from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMsgType, web
 
-from .processes import exclusive_lock
+from .processes import QT_WS_LISTEN_FD, exclusive_lock, reserve_ws_listener
 
 
 @dataclass(frozen=True)
@@ -108,6 +109,7 @@ class Workspace:
     process: asyncio.subprocess.Process | None = None
     monitor: asyncio.Task[None] | None = None
     viewer: Viewer | None = None
+    ws_listener: socket.socket | None = field(default=None, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def snapshot(self) -> dict[str, object]:
@@ -166,16 +168,29 @@ class SessionManager:
                 return None
             return 0
         port = metadata.get("ws_port")
-        if type(port) is not int or not 1 <= port <= 65535:
+        if type(port) is not int or workspace.ws_listener is None:
+            return None
+        try:
+            if port != workspace.ws_listener.getsockname()[1]:
+                return None
+        except OSError:
             return None
         return port
 
     async def _ended(self, workspace: Workspace) -> None:
+        # Callers hold workspace.lock, including admission through ws_connect.
+        # A dead renderer cannot free this generation's port for another owner
+        # between endpoint validation and the viewer's connect.
         workspace.state = "ended"
         workspace.pid = None
         viewer, workspace.viewer = workspace.viewer, None
-        if viewer:
-            await viewer.close()
+        try:
+            if viewer:
+                await viewer.close()
+        finally:
+            if workspace.ws_listener is not None:
+                workspace.ws_listener.close()
+                workspace.ws_listener = None
 
     async def _refresh(self, workspace: Workspace) -> None:
         if (workspace.process is not None and workspace.process.returncode is not None
@@ -229,15 +244,18 @@ class SessionManager:
                 return workspace.snapshot()
             if workspace.process is not None and workspace.process.returncode is None:
                 await self._stop(workspace.process)
+            await self._ended(workspace)
             workspace.generation = uuid.uuid4().hex
             workspace.state = "starting"
             workspace.pid = None
             workspace.process = None
             runtime, artifacts = self.launch_paths(workspace)
+            spawning: asyncio.Task[asyncio.subprocess.Process] | None = None
             try:
                 runtime.mkdir(parents=True, mode=0o700)
                 artifacts.mkdir(parents=True, mode=0o700)
                 environment = dict(os.environ)
+                environment.pop(QT_WS_LISTEN_FD, None)
                 environment.update({
                     "SWAG_USER": workspace.user,
                     "SWAG_GENERATION": workspace.generation,
@@ -251,11 +269,19 @@ class SessionManager:
                     "SWAG_START_TIMEOUT_SECONDS": str(self.config.start_timeout),
                     "SWAG_RENDER_BACKEND": self.config.render_backend,
                 })
+                pass_fds: tuple[int, ...] = ()
+                if self.config.render_backend == "qt-ws":
+                    workspace.ws_listener = reserve_ws_listener()
+                    descriptor = workspace.ws_listener.fileno()
+                    environment[QT_WS_LISTEN_FD] = str(descriptor)
+                    pass_fds = (descriptor,)
                 with (artifacts / "launcher.log").open("ab", buffering=0) as log:
-                    process = await asyncio.create_subprocess_exec(
+                    spawning = asyncio.create_task(asyncio.create_subprocess_exec(
                         *self.config.launcher_command, env=environment,
                         stdout=log, stderr=asyncio.subprocess.STDOUT, start_new_session=True,
-                    )
+                        pass_fds=pass_fds,
+                    ))
+                    process = await asyncio.shield(spawning)
                 workspace.process = process
                 deadline = time.monotonic() + self.config.start_timeout
                 while True:
@@ -274,18 +300,57 @@ class SessionManager:
                         raise TimeoutError("workspace startup timed out")
                     await asyncio.sleep(0.05)
             except BaseException as error:
-                if workspace.process is not None:
-                    await self._stop(workspace.process)
-                await self._ended(workspace)
-                if isinstance(error, asyncio.CancelledError):
-                    raise
+                async def cleanup_failed_start() -> None:
+                    try:
+                        # A cancelled spawn may still create a child. Collect its
+                        # result and reap it before releasing this generation.
+                        if workspace.process is None and spawning is not None:
+                            try:
+                                workspace.process = await spawning
+                            except Exception:
+                                pass  # A failed exec created no owned child.
+                        if workspace.process is not None:
+                            await self._stop(workspace.process)
+                    finally:
+                        await self._ended(workspace)
+
+                cleanup = asyncio.create_task(cleanup_failed_start())
+                cancelled = isinstance(error, asyncio.CancelledError)
+                while True:
+                    try:
+                        await asyncio.shield(cleanup)
+                        break
+                    except asyncio.CancelledError:
+                        if cleanup.cancelled():
+                            raise
+                        # Repeated request cancellation must not abandon cleanup
+                        # or release workspace.lock while a child is untracked.
+                        cancelled = True
+                if cancelled:
+                    raise asyncio.CancelledError from error
                 raise SessionError(503, "launch_failed", "workspace failed to start; inspect launcher logs") from error
 
     async def end(self, workspace: Workspace) -> dict[str, object]:
         async with workspace.lock:
-            await self._ended(workspace)
-            if workspace.process:
-                await self._stop(workspace.process)
+            async def cleanup() -> None:
+                try:
+                    await self._ended(workspace)
+                finally:
+                    if workspace.process:
+                        await self._stop(workspace.process)
+
+            ending = asyncio.create_task(cleanup())
+            cancelled = False
+            while True:
+                try:
+                    await asyncio.shield(ending)
+                    break
+                except asyncio.CancelledError:
+                    if ending.cancelled():
+                        raise
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
             return workspace.snapshot()
 
     async def close(self) -> None:
@@ -326,7 +391,7 @@ class SessionManager:
                     upstream = await asyncio.wait_for(
                         client_session.ws_connect(f"ws://127.0.0.1:{port}/",
                                                   max_msg_size=16 * 1024 * 1024,
-                                                  compress=0, heartbeat=10), 3,
+                                                  compress=0), 3,
                     )
             except BaseException as error:
                 if client_session is not None:
