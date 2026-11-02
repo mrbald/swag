@@ -19,6 +19,55 @@ For an existing multi-frame application, use the focused
 [Qt application porting guide](docs/integration/README.md): topology, application
 changes, window-manager/MDI choices, and reproduction checks.
 
+## Transplant the Qt WebSocket plugin into your application
+
+This optional path renders Qt Widgets directly over WebSocket without X11/Xvnc.
+Use Linux raster widgets with **Qt 5.15**, and build against the **same Qt build
+and private development libraries as your application**. The plugin uses C++17;
+your application can keep C++23/GCC Toolset 15.
+
+1. Copy the entire [`src/plugins/vncws/`](src/plugins/vncws/) directory, including
+   its license files, into your application's repository, for example as
+   `third_party/vncws/`. The [plugin README](src/plugins/vncws/README.md) lists
+   the Qt/private-support, WebSockets, libxkbcommon and zlib build dependencies.
+2. Add it to your existing CMake project after `project(... LANGUAGES CXX)`:
+
+   ```cmake
+   add_subdirectory(third_party/vncws)
+   ```
+
+   No linking to the plugin or change to `main()` is needed: Qt loads the module
+   at startup. Build and install your application normally; the plugin's install
+   rule produces `<prefix>/plugins/platforms/libqvncws.so`. Include that file in
+   the **application RPM**, alongside the application and its runtime dependencies.
+3. For a private, single-process smoke test, launch your existing executable:
+
+   ```sh
+   QT_PLUGIN_PATH=/opt/client-app/plugins \
+   QT_QPA_PLATFORM=vncws:size=1280x800:port=5900 \
+   QT_FORCE_STDERR_LOGGING=1 \
+     /opt/client-app/bin/client-app
+   ```
+
+   Replace the paths with your install prefix. This listens on `127.0.0.1:5900`
+   and serves **binary WebSocket/RFB**, not an HTML page. Serve noVNC separately
+   and route its WebSocket connection to this listener. This repository's tested
+   client is noVNC 1.7.0.
+4. For multiple authenticated users, let the supervisor reserve a separate
+   loopback listener per process/generation and pass its inherited descriptor as
+   `QT_QPA_PLATFORM=vncws:fd=N`. Keep the supervisor's reservation until locked
+   generation teardown, coordinating viewer admission with that same lock.
+   Authentication, TLS, identity-to-process routing and session lifetime belong
+   to your proxy/supervisor; the plugin does not authenticate viewers. The
+   infrastructure RPM and site configuration remain separate from the application.
+
+The qualified application layout is MDI without an external window manager.
+Check your own dialogs, popups, focus, clipboard, resize, reconnect and takeover;
+native X11 handles, OpenGL/Quick/WebEngine and IMEs are not qualified. For a
+standalone plugin build, supervisor details and acceptance checks, see the
+[plugin integration guide](docs/integration/vncws.md); for application layout
+changes, see the [Qt porting guide](docs/integration/README.md).
+
 ## Authenticated workspace
 
 Requires a running Podman Linux engine, Python 3.12, uv, CMake >=3.25,
