@@ -63,6 +63,7 @@ RUN cmake --preset probe \
     && rm -rf /src
 COPY tools/backends /opt/swag/backends
 COPY web/probe.html /opt/novnc/probe.html
+COPY web/clipboard.js /opt/novnc/clipboard.js
 RUN chmod 0755 /opt/swag/backends/*.py /opt/swag/backends/launch-qt /opt/swag/backends/launch-tiger \
     && chmod 0700 /run/swag \
     && python3.12 /opt/swag/backends/manifest.py > /opt/swag/image-manifest.json
@@ -123,6 +124,7 @@ USER 1000:1000
 FROM deps AS edge
 RUN dnf -y install nginx && dnf clean all && rm -rf /var/cache/dnf
 COPY web/workspace.html /opt/novnc/index.html
+COPY web/clipboard.js /opt/novnc/clipboard.js
 COPY web/signed-out.html /opt/novnc/signed-out.html
 EXPOSE 8082
 ENTRYPOINT ["/usr/sbin/nginx", "-g", "daemon off;"]

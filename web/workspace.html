@@ -9,7 +9,7 @@ button,input{font:inherit}button{border:1px solid #b6c7d2;border-radius:3px;padd
 #bar{height:36px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:3px 8px;background:#edf2f6;border-bottom:1px solid #bccbd6;z-index:10}
 #brand{font-size:13px}#status{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#screen{flex:1;min-width:0;min-height:0;overflow:hidden}
 .panel{position:absolute;right:8px;top:40px;z-index:30;width:min(380px,calc(100% - 16px));padding:14px;background:white;border:1px solid #b6c7d2;border-radius:5px;box-shadow:0 4px 20px #102c4250}
-.panel h2{font-size:14px;margin:0 0 10px}.panel p{font-size:12px;margin:8px 0;color:#40566a}.panel .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}#clipboard{width:100%;padding:7px;border:1px solid #7e96aa;border-radius:3px}#signout{width:100%;text-align:left}
+.panel h2{font-size:14px;margin:0 0 10px}.panel p{font-size:12px;margin:8px 0;color:#40566a}.panel .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}#clipboard{width:100%;padding:7px;border:1px solid #7e96aa;border-radius:3px}.panel #clipboard-error{color:#9b1c1c}#signout{width:100%;text-align:left}
 #empty{color:#dbe6ee;display:grid;place-items:center;height:100%;font-size:18px;padding:16px;text-align:center}#reveal{display:none}
 #workspace:fullscreen{width:100vw;height:100vh}#workspace:fullscreen #screen{flex:none;position:absolute;inset:0}
 #workspace:fullscreen #bar{position:absolute;inset:0 0 auto;height:36px;transform:translateY(-100%);transition:transform .12s}
@@ -22,16 +22,28 @@ button,input{font:inherit}button{border:1px solid #b6c7d2;border-radius:3px;padd
 <body><div id="workspace">
 <div id="bar" role="toolbar" aria-label="Workspace controls"><strong id="brand">Portfolio</strong><span id="status" role="status">Checking session…</span><button id="start" disabled>Start workspace</button><button id="clipboard-toggle" aria-expanded="false" aria-controls="clipboard-panel" disabled>Clipboard</button><button id="fullscreen" title="Enter full screen">Full screen</button><button id="account-toggle" aria-expanded="false" aria-controls="account-panel" aria-label="Account and session"><span id="user">Account</span> ▾</button></div>
 <button id="reveal" aria-controls="bar" aria-expanded="false" title="Show workspace controls">Controls ▾</button>
-<section id="clipboard-panel" class="panel" role="dialog" aria-label="Clipboard" hidden><h2>Clipboard</h2><input id="clipboard" aria-label="Clipboard text" placeholder="Text to send or received from Qt"><p>Send text here, then paste inside the application with Ctrl+V. Copied application text appears here.</p><div class="actions"><button id="paste">Send clipboard</button><button id="clipboard-close">Close</button></div></section>
+<section id="clipboard-panel" class="panel" role="dialog" aria-label="Clipboard" hidden><h2>Clipboard</h2><input id="clipboard" aria-label="Clipboard text" placeholder="Text to send or received from Qt"><p id="clipboard-error" role="alert" hidden></p><p>Send text here, then paste inside the application with Ctrl+V. Copied application text appears here.</p><div class="actions"><button id="paste">Send clipboard</button><button id="clipboard-close">Close</button></div></section>
 <section id="account-panel" class="panel" role="dialog" aria-label="Account and session" hidden><h2>Session</h2><button id="signout">End session &amp; sign out</button><p>Ends this workspace, including unsaved edits. Identity-provider sign-in may remain active.</p><div class="actions"><button id="account-close">Close</button></div></section>
 <main id="screen"><div id="empty">Your workspace will appear here.</div></main>
 </div>
 <script type="module">
 import RFB from './core/rfb.js';
+import Deflator from './core/deflator.js';
+import {encodeUTF8} from './core/util/strings.js';
+import {preflightClipboard} from './clipboard.js';
 let session=null, rfb=null, connectedGeneration=null, stopped=false, busy=false;
 let signingOut=false, polling=false, revision=0;
 let viewerConnected=false, needsAttention=true, hideTimer=null, panel=null;
 const $=id=>document.getElementById(id);
+function clearClipboardError(){
+  $('clipboard-error').hidden=true;$('clipboard-error').textContent='';
+  $('clipboard').removeAttribute('aria-invalid');$('clipboard').removeAttribute('aria-describedby');
+}
+function showClipboardError(message){
+  $('clipboard-error').textContent=message;$('clipboard-error').hidden=false;
+  $('clipboard').setAttribute('aria-invalid','true');$('clipboard').setAttribute('aria-describedby','clipboard-error');
+  $('clipboard').focus();
+}
 const loginURL='/oauth2/start?rd=/';
 class ObsoleteRequest extends Error {}
 class LoginExpired extends Error {}
@@ -72,6 +84,7 @@ $('reveal').onclick=()=>{revealControls();$('fullscreen').focus();};
 $('bar').addEventListener('mouseenter',revealControls);$('bar').addEventListener('mouseleave',scheduleHide);
 $('bar').addEventListener('focusin',revealControls);$('bar').addEventListener('focusout',()=>setTimeout(scheduleHide,0));
 $('clipboard-toggle').onclick=()=>togglePanel('clipboard');$('account-toggle').onclick=()=>togglePanel('account');
+$('clipboard').addEventListener('input',clearClipboardError);
 $('clipboard-close').onclick=()=>closePanel(true);$('account-close').onclick=()=>{closePanel();$('account-toggle').focus();};
 document.addEventListener('pointerdown',event=>{if(panel&&!$(panel+'-panel').contains(event.target)&&!$(panel+'-toggle').contains(event.target))closePanel();});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&panel)closePanel(true);});
@@ -113,7 +126,7 @@ function attach(){
   const current=rfb=new RFB($('screen'),socket,{shared:true});current.scaleViewport=true;resizeMode(current);
   current.addEventListener('connect',()=>{if(rfb===current){viewerConnected=true;$('clipboard-toggle').disabled=false;status('Connected',false);show();scheduleHide();}});
   current.addEventListener('disconnect',()=>{if(rfb===current){rfb=null;viewerConnected=false;$('clipboard-toggle').disabled=true;closePanel();status('Viewer disconnected. Rejoin to take control.');$('start').hidden=false;$('start').textContent='Rejoin workspace';$('start').disabled=false;}});
-  current.addEventListener('clipboard',event=>{$('clipboard').value=event.detail.text;});
+  current.addEventListener('clipboard',event=>{$('clipboard').value=event.detail.text;clearClipboardError();});
 }
 function show(){
   $('user').textContent=session.user;
@@ -144,7 +157,11 @@ $('start').onclick=async()=>{
   if(stopped){location.href=loginURL;return;}if(busy||signingOut)return;busy=true;revision++;$('start').disabled=true;
   try{acceptSession(await api('POST'));attach();}catch(error){report(error);$('start').disabled=false;}finally{busy=false;}
 };
-$('paste').onclick=()=>{rfb?.clipboardPasteFrom($('clipboard').value);closePanel(true);};
+$('paste').onclick=()=>{
+  const result=preflightClipboard($('clipboard').value,encodeUTF8,data=>new Deflator().deflate(data));
+  if(!result.ok){showClipboardError(result.error);return;}
+  clearClipboardError();rfb?.clipboardPasteFrom($('clipboard').value);closePanel(true);
+};
 $('signout').onclick=async()=>{
   if(busy||signingOut)return;busy=true;signingOut=true;revision++;disconnect();$('start').hidden=false;status('Signing out…');
   try{await api('DELETE');stopped=true;disconnect();location.href='/oauth2/sign_out?rd=/signed-out';}

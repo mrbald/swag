@@ -14,6 +14,7 @@
     textarea { width: 380px; height: 55px; font: 13px monospace; }
     button { padding: 6px 12px; }
     #status { font-weight: 600; }
+    #clipboard-error { color: #9b1c1c; max-width: 220px; }
     .note { color: #555; }
   </style>
 </head>
@@ -30,13 +31,26 @@
       <textarea id="clipboard-input" aria-label="Send clipboard text to Qt"></textarea>
     </label>
     <button id="send-clipboard" type="button">Send clipboard</button>
+    <p id="clipboard-error" role="alert" hidden></p>
     <label>Clipboard received from Qt
       <textarea id="clipboard-output" aria-label="Clipboard received from Qt" readonly></textarea>
     </label>
   </footer>
   <script type="module">
     import RFB from './core/rfb.js';
+    import Deflator from './core/deflator.js';
+    import {encodeUTF8} from './core/util/strings.js';
+    import {preflightClipboard} from './clipboard.js';
     const status = document.querySelector('#status');
+    const clipboardInput = document.querySelector('#clipboard-input');
+    const clipboardError = document.querySelector('#clipboard-error');
+    function clearClipboardError() {
+      clipboardError.hidden = true;
+      clipboardError.textContent = '';
+      clipboardInput.removeAttribute('aria-invalid');
+      clipboardInput.removeAttribute('aria-describedby');
+    }
+    clipboardInput.addEventListener('input', clearClipboardError);
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsPort = new URLSearchParams(location.search).get('wsPort');
     if (wsPort && (!/^\d+$/.test(wsPort) || Number(wsPort) < 1 || Number(wsPort) > 65535))
@@ -55,7 +69,17 @@
       document.querySelector('#clipboard-output').value = event.detail.text;
     });
     document.querySelector('#send-clipboard').addEventListener('click', () => {
-      rfb.clipboardPasteFrom(document.querySelector('#clipboard-input').value);
+      const result = preflightClipboard(clipboardInput.value, encodeUTF8, data => new Deflator().deflate(data));
+      if (!result.ok) {
+        clipboardError.textContent = result.error;
+        clipboardError.hidden = false;
+        clipboardInput.setAttribute('aria-invalid', 'true');
+        clipboardInput.setAttribute('aria-describedby', 'clipboard-error');
+        clipboardInput.focus();
+        return;
+      }
+      clearClipboardError();
+      rfb.clipboardPasteFrom(clipboardInput.value);
     });
     document.querySelector('#disconnect').addEventListener('click', () => { rfb.disconnect(); });
   </script>
