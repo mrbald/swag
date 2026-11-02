@@ -587,8 +587,11 @@ void QVncClient::sendExtendedClipboard(quint32 flags, const QByteArray &data)
 void QVncClient::sendExtendedClipboardProvide(const QString &text)
 {
     QByteArray utf8;
-    if (!encodeClipboardText(text, &utf8))
+    if (!encodeClipboardText(text, &utf8)) {
+        if (m_clientClipboardActions & ClipboardNotify)
+            sendExtendedClipboard(ClipboardNotify);
         return;
+    }
     QByteArray plain(4, '\0');
     qToBigEndian(quint32(utf8.size()), reinterpret_cast<uchar *>(plain.data()));
     plain.append(utf8);
@@ -597,8 +600,11 @@ void QVncClient::sendExtendedClipboardProvide(const QString &text)
     if (compress2(reinterpret_cast<Bytef *>(compressed.data()), &compressedSize,
                   reinterpret_cast<const Bytef *>(plain.constData()),
                   uLong(plain.size()), Z_DEFAULT_COMPRESSION) != Z_OK ||
-        compressedSize > uLongf(MaxClipboardBytes - 4))
+        compressedSize > uLongf(MaxClipboardBytes - 4)) {
+        if (m_clientClipboardActions & ClipboardNotify)
+            sendExtendedClipboard(ClipboardNotify);
         return;
+    }
     compressed.resize(int(compressedSize));
     sendExtendedClipboard(ClipboardProvide | ClipboardText, compressed);
 }
@@ -609,9 +615,9 @@ void QVncClient::sendClipboardText(const QString &text)
         return;
     if (m_supportExtendedClipboard) {
         QByteArray utf8;
-        if ((m_clientClipboardActions & ClipboardNotify) && m_clientClipboardText &&
-            encodeClipboardText(text, &utf8))
-            sendExtendedClipboard(ClipboardNotify | ClipboardText);
+        if ((m_clientClipboardActions & ClipboardNotify) && m_clientClipboardText)
+            sendExtendedClipboard(ClipboardNotify |
+                (encodeClipboardText(text, &utf8) ? ClipboardText : 0u));
         return;
     }
     if (text.size() > MaxClipboardBytes)

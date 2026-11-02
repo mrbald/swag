@@ -45,7 +45,12 @@ does not establish font coverage or IME support.
 The supplied SWAG browser pages validate normalized UTF-8 and the pinned noVNC
 compressed payload before sending. Rejected text remains editable with a visible
 error. The plugin still disconnects invalid/oversized inbound protocol messages;
-oversized outbound Qt clipboard text is still omitted.
+oversized outbound text is not transferred. Extended Clipboard peers receive
+the standard Notify-without-Text signal when text is unavailable. The supplied
+noVNC client applies `tools/patch_novnc.py` to the pinned 1.7.0 source so the shell
+can clear stale text and display an explanation; a later valid copy clears it.
+Unpatched noVNC ignores that notification. Legacy viewers cannot report this
+availability state and retain the previous silent-omission behavior.
 
 The accepted client pixel formats are 32 bits per pixel, depth 24 or 32,
 little-endian true color with 8-bit red/green/blue channels and shifts either

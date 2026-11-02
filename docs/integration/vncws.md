@@ -375,7 +375,7 @@ Preflight uses the pinned noVNC UTF-8 encoder and fresh Deflator: normalized
 UTF-8 including terminal NUL must fit 1 MiB, and the compressed stream plus its
 four flag bytes must fit 1 MiB. Embedded NUL and malformed UTF-16 are rejected.
 The same conservative policy applies before legacy fallback. Plugin-side limits
-and disconnect policy remain unchanged; oversized outbound-copy feedback remains
+and disconnect policy remain unchanged; oversized outbound-copy feedback remained
 future work. An independently embedded viewer must supply its own validation.
 
 Standalone and combined application/plugin builds passed on aarch64 EL8,
@@ -482,6 +482,30 @@ Full evidence, relevant final nonfunctional results, rejected harness runs and
 the next bounded review candidates are indexed under `artifacts/qt-ws-batch1/`.
 These are native EL8 and installed macOS Chrome observations, not qualification
 of the client's Windows/RDP path. Clean runtime packaging remains a separate task.
+
+## Outbound clipboard availability
+
+A real noVNC reproduction copied 10,000 characters successfully, then grew the
+selection inside Qt to 1,280,000 characters using copy/paste. Previously the
+browser retained an older copy without warning. The plugin now sends the standard
+Extended Clipboard Notify-without-Text signal when it cannot transfer the text.
+The supplied pages clear the stale value, explain that the clipboard is unavailable
+or exceeds transfer limits, and recover on the next successful copy. The limit
+stays 1 MiB; text is not truncated or replaced with an error message as clipboard data.
+
+Pinned noVNC 1.7.0 ignores that availability signal upstream, so the image build
+applies `tools/patch_novnc.py`. It verifies the exact upstream `rfb.js` hash before
+adding a `clipboardunavailable` event and clearing the client's cached clipboard.
+Changed upstream source fails the build for review. Both renderer comparisons use
+the same patched client. An independently embedded viewer needs equivalent handling;
+legacy clients cannot express this state and retain silent omission.
+
+The isolated probe and authenticated shell both pass small/oversized/recovered
+copy sequences. The 126-check functional gate, 16 Tiger reference checks and
+26 original-app MDI/workspace/Unicode clipboard checks pass, including ordinary
+empty clipboard behavior. Evidence: `artifacts/qt-ws-followups/clipboard-verified.json`.
+The original application and probe binaries are unchanged; the plugin, noVNC hook
+and HTML shell changed. The four-frame demo was restored afterward.
 
 ## Client qualification
 

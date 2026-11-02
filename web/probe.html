@@ -67,6 +67,13 @@
     rfb.addEventListener('securityfailure', () => { status.textContent = 'Authentication failed'; });
     rfb.addEventListener('clipboard', event => {
       document.querySelector('#clipboard-output').value = event.detail.text;
+      clearClipboardError();
+    });
+    rfb.addEventListener('clipboardunavailable', () => {
+      document.querySelector('#clipboard-output').value = '';
+      clearClipboardError();
+      clipboardError.textContent = 'Application clipboard is unavailable or exceeds transfer limits. Copy a smaller selection.';
+      clipboardError.hidden = false;
     });
     document.querySelector('#send-clipboard').addEventListener('click', () => {
       const result = preflightClipboard(clipboardInput.value, encodeUTF8, data => new Deflator().deflate(data));

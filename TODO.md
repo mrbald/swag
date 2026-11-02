@@ -48,3 +48,7 @@ Root maintains this checklist. No separate task system.
 - [x] Reproduce and fix autorepeat semantics; pass 65 focused checks, commit and push the slice.
 - [x] Fix the keyboard Context Menu mapping and Qt context event; pass 60 focused checks, commit and push the slice.
 - [x] Supply Japanese font coverage; verify actual fallback glyphs and 38 browser checks, restore the demo, commit and push the slice.
+
+- [x] Surface unavailable oversized outbound clipboard text; verify real noVNC/shell failure and recovery plus functional regressions, commit/push.
+- [ ] Add one functional regression entry point, test failure propagation and run all selected suites, commit/push.
+- [ ] Qualify the installed probe/plugin in a clean runtime-only EL8 image, document dependencies, commit/push.

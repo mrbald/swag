@@ -35,6 +35,10 @@ RUN curl --fail --location --silent --show-error \
     && python3.12 -m pip install --no-cache-dir --no-deps "/tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl" \
     && rm /tmp/novnc.tar.gz "/tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl"
 
+COPY tools/patch_novnc.py /tmp/patch_novnc.py
+RUN python3.12 /tmp/patch_novnc.py /opt/novnc/core/rfb.js \
+    && rm /tmp/patch_novnc.py
+
 RUN groupadd --gid 1000 swag \
     && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash swag \
     && mkdir -p /artifacts /run/swag \

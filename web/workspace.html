@@ -39,10 +39,10 @@ function clearClipboardError(){
   $('clipboard-error').hidden=true;$('clipboard-error').textContent='';
   $('clipboard').removeAttribute('aria-invalid');$('clipboard').removeAttribute('aria-describedby');
 }
-function showClipboardError(message){
+function showClipboardError(message,focus=true){
   $('clipboard-error').textContent=message;$('clipboard-error').hidden=false;
   $('clipboard').setAttribute('aria-invalid','true');$('clipboard').setAttribute('aria-describedby','clipboard-error');
-  $('clipboard').focus();
+  if(focus)$('clipboard').focus();
 }
 const loginURL='/oauth2/start?rd=/';
 class ObsoleteRequest extends Error {}
@@ -130,7 +130,18 @@ function attach(){
   const current=rfb=new RFB($('screen'),socket,{shared:true});current.scaleViewport=true;resizeMode(current);
   current.addEventListener('connect',()=>{if(rfb===current){viewerConnected=true;$('clipboard-toggle').disabled=false;status('Connected',false);resizeMode(current);show();scheduleHide();}});
   current.addEventListener('disconnect',()=>{if(rfb===current){rfb=null;viewerConnected=false;$('display-notice').hidden=true;$('clipboard-toggle').disabled=true;closePanel();status('Viewer disconnected. Rejoin to take control.');$('start').hidden=false;$('start').textContent='Rejoin workspace';$('start').disabled=false;}});
-  current.addEventListener('clipboard',event=>{$('clipboard').value=event.detail.text;clearClipboardError();});
+  let clipboardUnavailable=false;
+  current.addEventListener('clipboard',event=>{
+    if(rfb!==current)return;
+    $('clipboard').value=event.detail.text;clearClipboardError();
+    if(clipboardUnavailable){clipboardUnavailable=false;status('Connected',false);}
+  });
+  current.addEventListener('clipboardunavailable',()=>{
+    if(rfb!==current)return;
+    clipboardUnavailable=true;$('clipboard').value='';
+    showClipboardError('Application clipboard is unavailable or exceeds transfer limits. Copy a smaller selection.',false);
+    status('Application clipboard unavailable. Copy a smaller selection.',true);
+  });
 }
 function show(){
   $('user').textContent=session.user;

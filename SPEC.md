@@ -191,3 +191,9 @@ Minimize transport-shell overhead with one compact connection bar and on-demand
 clipboard/account controls. Support user-initiated browser fullscreen with
 revealable overlay controls and a reliable Escape exit. Preserve authentication,
 rejoin/explicit-start semantics, clipboard focus and unsaved Qt state.
+
+Approved local follow-up: remove stale outbound clipboard ambiguity with bounded
+protocol-compatible availability feedback; provide one explicit functional test
+gate with machine-readable results and separate network/soak qualification; prove
+the installed probe/plugin works in a fresh EL8 runtime image without build tools.
+Test and commit/push each slice. This does not replace actual-client qualification.
