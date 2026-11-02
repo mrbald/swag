@@ -45,3 +45,6 @@ Root maintains this checklist. No separate task system.
 - [x] Qualify actual Qt item drag-and-drop through noVNC against the Tiger reference; fix only reproduced failures.
 - [x] Fix opaque custom-cursor mask truncation exposed by the large-frame acceptance test; verify RGB and alpha cursors.
 - [x] Integrate, pass three ultrawide network profiles and a five-minute two-user soak, restore the demo, and record the next everyday-behavior review candidates.
+- [x] Reproduce and fix autorepeat semantics; pass 65 focused checks, commit and push the slice.
+- [ ] Verify and fix the keyboard Context Menu key; test, commit and push the slice.
+- [ ] Supply Japanese font coverage for the demonstrated glyph gap; test, commit and push the slice.

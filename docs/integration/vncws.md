@@ -485,6 +485,15 @@ of the client's Windows/RDP path. Clean runtime packaging remains a separate tas
 
 ## Client qualification
 
+Repeated key-down messages now retain Qt's autorepeat flag. This honors
+`QShortcut::setAutoRepeat(false)` while repeating shortcuts and ordinary text
+still repeat. A release followed by a press is a new action; disconnect/replacement
+clears held-key state. The baseline fired a non-repeating action three times;
+the fixed plugin fired once and matched Tiger in the real noVNC fixture.
+Evidence: `artifacts/qt-ws-slices/repeat-browser-*`, `repeat-wire`, `repeat-smoke`
+and `repeat-mdi` (65 passing checks). RFB carries no explicit repeat flag, so
+clients sending release/press pairs retain their distinct-press semantics.
+
 The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
 The browser client is understood to be Chrome on a Windows VM, probably in Azure;
 Azure hosting is unconfirmed. This is close to the tested EL8 stack, but the exact

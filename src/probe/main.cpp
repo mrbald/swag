@@ -307,6 +307,7 @@ protected:
             ++rawKeyEvents_;
             lastKeyCode_ = key->key();
             lastKeyModifiers_ = int(key->modifiers());
+            lastKeyAutoRepeat_ = key->isAutoRepeat();
             lastKeyText_ = key->text();
             lastKeyReceiver_ = watched->objectName();
             record(QStringLiteral("raw_key:%1").arg(lastKeyCode_));
@@ -377,7 +378,7 @@ private:
         dialog->setMinimumSize(520, 560);
         dialog->resize(560, 600);
         auto *layout = new QVBoxLayout(dialog);
-        layout->addWidget(new QLabel(QStringLiteral("Click the field, then press Return or keypad Enter."), dialog));
+        layout->addWidget(new QLabel(QStringLiteral("Click the field, then press Return, keypad Enter, F6, or F7."), dialog));
         keyInput_ = new QLineEdit(dialog);
         keyInput_->setObjectName(QStringLiteral("key_input"));
         keyInput_->setPlaceholderText(QStringLiteral("Key shortcut target"));
@@ -386,8 +387,9 @@ private:
         keyActionsLabel_->setObjectName(QStringLiteral("key_actions_label"));
         layout->addWidget(keyActionsLabel_);
         auto updateKeyLabel = [this] {
-            keyActionsLabel_->setText(QStringLiteral("Return actions: %1 | Keypad Enter actions: %2")
-                                          .arg(returnShortcutActions_).arg(enterShortcutActions_));
+            keyActionsLabel_->setText(QStringLiteral("Return: %1 | Keypad Enter: %2 | F6: %3 | F7: %4")
+                                          .arg(returnShortcutActions_).arg(enterShortcutActions_)
+                                          .arg(f6NonrepeatActions_).arg(f7RepeatActions_));
         };
         updateKeyLabel();
         auto *returnShortcut = new QShortcut(QKeySequence(Qt::Key_Return), keyInput_);
@@ -409,6 +411,22 @@ private:
         };
         connect(enterShortcut, &QShortcut::activated, this, onEnter);
         connect(keypadEnterShortcut, &QShortcut::activated, this, onEnter);
+        auto *f6Shortcut = new QShortcut(QKeySequence(Qt::Key_F6), keyInput_);
+        f6Shortcut->setContext(Qt::WidgetShortcut);
+        f6Shortcut->setAutoRepeat(false);
+        connect(f6Shortcut, &QShortcut::activated, this, [this, updateKeyLabel] {
+            ++f6NonrepeatActions_;
+            updateKeyLabel();
+            record(QStringLiteral("f6_nonrepeat_shortcut"));
+        });
+        auto *f7Shortcut = new QShortcut(QKeySequence(Qt::Key_F7), keyInput_);
+        f7Shortcut->setContext(Qt::WidgetShortcut);
+        f7Shortcut->setAutoRepeat(true);
+        connect(f7Shortcut, &QShortcut::activated, this, [this, updateKeyLabel] {
+            ++f7RepeatActions_;
+            updateKeyLabel();
+            record(QStringLiteral("f7_repeat_shortcut"));
+        });
 
         layout->addWidget(new QLabel(QStringLiteral("Multiline clipboard text:"), dialog));
         multilineEditor_ = new QTextEdit(dialog);
@@ -538,6 +556,8 @@ private:
             {QStringLiteral("interactions_open"), interactionsOpen_},
             {QStringLiteral("return_shortcut_actions"), returnShortcutActions_},
             {QStringLiteral("enter_shortcut_actions"), enterShortcutActions_},
+            {QStringLiteral("f6_nonrepeat_actions"), f6NonrepeatActions_},
+            {QStringLiteral("f7_repeat_actions"), f7RepeatActions_},
             {QStringLiteral("multiline_text"), interactionsOpen_ ? multilineEditor_->toPlainText() : QString()},
             {QStringLiteral("reorder_order"), reorderOrder},
             {QStringLiteral("dialog_text"), dialogEditor_ ? dialogEditor_->text() : QString()},
@@ -558,6 +578,7 @@ private:
             {QStringLiteral("raw_key_events"), rawKeyEvents_},
             {QStringLiteral("last_key_code"), lastKeyCode_},
             {QStringLiteral("last_key_modifiers"), lastKeyModifiers_},
+            {QStringLiteral("last_key_auto_repeat"), lastKeyAutoRepeat_},
             {QStringLiteral("last_key_text"), lastKeyText_},
             {QStringLiteral("last_key_receiver"), lastKeyReceiver_},
             {QStringLiteral("wheel_events"), wheelEvents_},
@@ -613,8 +634,11 @@ private:
     int rawKeyEvents_{};
     int returnShortcutActions_{};
     int enterShortcutActions_{};
+    int f6NonrepeatActions_{};
+    int f7RepeatActions_{};
     int lastKeyCode_{};
     int lastKeyModifiers_{};
+    bool lastKeyAutoRepeat_{};
     int wheelEvents_{};
     int lastWheelModifiers_{};
     QString lastEvent_;

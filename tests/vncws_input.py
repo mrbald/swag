@@ -161,6 +161,45 @@ async def checks(url: str, output: Path):
             return {'return_keycode': KEY_RETURN, 'keypad_enter_keycode': KEY_ENTER,
                     'keypad_modifier': KEYPAD, 'ordinary_after_keypad': CONTROL}
 
+        async def repeat_flags(rfb):
+            async def down(keysym, code, repeat, modifiers=0):
+                before = (await observed(output, lambda s: s['ready']))['raw_key_events']
+                await rfb.ws.send_bytes(key(True, keysym))
+                state = await observed(output, lambda s: s['raw_key_events'] > before)
+                assert state['last_key_code'] == code, state
+                assert state['last_key_auto_repeat'] is repeat, state
+                assert state['last_key_modifiers'] == modifiers, state
+            await down(0xffc2, 0x01000034, False)  # F5
+            await down(0xffc2, 0x01000034, True)
+            await rfb.ws.send_bytes(key(False, 0xffc2))
+            await down(0xffc2, 0x01000034, False)
+            await rfb.ws.send_bytes(key(False, 0xffc2) + key(True, 0xffe3))
+            await observed(output, lambda s: s['keyboard_modifiers'] == CONTROL)
+            await down(0xffb1, ord('1'), False, CONTROL | KEYPAD)
+            await down(0xffb1, ord('1'), True, CONTROL | KEYPAD)
+            await rfb.ws.send_bytes(key(False, 0xffb1) + key(False, 0xffe3))
+            return {'first_repeat_repress': [False, True, False],
+                    'repeated_keypad_modifiers': CONTROL | KEYPAD}
+
+        async def repeat_reset(rfb, replacement):
+            before = (await observed(output, lambda s: s['ready']))['raw_key_events']
+            await rfb.ws.send_bytes(key(True, 0xffc2))
+            await observed(output, lambda s: s['raw_key_events'] > before and
+                           s['last_key_code'] == 0x01000034)
+            if not replacement:
+                await rfb.ws.close()
+            fresh = protocol.Rfb(await session.ws_connect(url))
+            try:
+                await fresh.init()
+                before = (await observed(output, lambda s: s['ready']))['raw_key_events']
+                await fresh.ws.send_bytes(key(True, 0xffc2))
+                state = await observed(output, lambda s: s['raw_key_events'] > before)
+                assert state['last_key_code'] == 0x01000034, state
+                assert state['last_key_auto_repeat'] is False, state
+                return {'first_press_after_replacement' if replacement else 'first_press_after_disconnect': False}
+            finally:
+                await fresh.ws.close()
+
         await run('ctrl_release_then_pointer',
                   lambda r: release_then_pointer(r, 0xffe3, CONTROL))
         await run('shift_release_then_pointer',
@@ -196,6 +235,9 @@ async def checks(url: str, output: Path):
                   lambda r: disconnect_releases_input(r, 0xffe7))
         await run('keypad_enter_identity_and_event_local_modifier',
                   keypad_identity_and_modifiers)
+        await run('autorepeat_flags_release_and_keypad', repeat_flags)
+        await run('autorepeat_resets_on_disconnect', lambda r: repeat_reset(r, False))
+        await run('autorepeat_resets_on_replacement', lambda r: repeat_reset(r, True))
     return results
 
 

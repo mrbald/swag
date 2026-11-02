@@ -149,6 +149,12 @@ then relevant nonfunctional checks after integration, followed by another bounde
 review for overlooked everyday behavior. Clean runtime packaging and the blocked
 session-path audit remain outside this batch.
 
+Continue with tested, separately committed and pushed slices: first preserve Qt
+autorepeat semantics, then verify the keyboard Context Menu key, then address the
+demonstrated Japanese font gap in the supplied images. Reproduce each behavior
+before fixing it, retain focused browser/wire evidence, and preserve unrelated
+user edits. The parked session audit remains excluded.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

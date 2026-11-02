@@ -84,6 +84,51 @@ def main():
             passed()
 
             if not args.workspace_origin:
+                current = 'nonrepeating_shortcut_held_key'
+                click('key_input')
+                before = actor.state()
+                page.keyboard.down('F6')
+                try:
+                    state = actor.wait(lambda s: s['f6_nonrepeat_actions'] == before['f6_nonrepeat_actions']+1)
+                    repeat_start = state['raw_key_events']
+                    page.keyboard.down('F6')
+                    page.keyboard.down('F6')
+                    state = actor.wait(lambda s: s['raw_key_events'] >= repeat_start+2)
+                    assert state['f6_nonrepeat_actions'] == before['f6_nonrepeat_actions']+1, state
+                    assert state['last_key_auto_repeat'] is True, state
+                finally:
+                    page.keyboard.up('F6')
+                page.keyboard.press('F6')
+                state = actor.wait(lambda s: s['f6_nonrepeat_actions'] == before['f6_nonrepeat_actions']+2)
+                assert state['last_key_auto_repeat'] is False, state
+                passed(held_key_actions=1, new_press_actions=1)
+
+                current = 'repeating_shortcut_held_key'
+                before = actor.state()
+                page.keyboard.down('F7')
+                try:
+                    page.keyboard.down('F7')
+                    page.keyboard.down('F7')
+                    state = actor.wait(lambda s: s['f7_repeat_actions'] == before['f7_repeat_actions']+3)
+                    assert state['last_key_auto_repeat'] is True, state
+                finally:
+                    page.keyboard.up('F7')
+                passed(held_key_actions=3)
+
+                current = 'ordinary_text_still_repeats'
+                click('multiline_editor')
+                page.keyboard.press('Control+a')
+                page.keyboard.press('Backspace')
+                page.keyboard.down('x')
+                try:
+                    page.keyboard.down('x')
+                    page.keyboard.down('x')
+                    state = actor.wait(lambda s: s['multiline_text'] == 'xxx')
+                    assert state['last_key_auto_repeat'] is True, state
+                finally:
+                    page.keyboard.up('x')
+                passed(text=state['multiline_text'])
+
                 current = 'ordinary_return_action'
                 click('key_input')
                 before = actor.state()

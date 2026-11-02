@@ -880,6 +880,7 @@ void QVncClient::keyEvent()
             return;
         }
         if (ev.unicode || ev.keycode) {
+            const bool autoRepeat = ev.down && m_heldKeys.contains(ev.keysym);
             const uint codepoint = uint(ev.unicode);
             const QString text = ev.unicode ? QString::fromUcs4(&codepoint, 1) : QString();
             if (ev.down && !m_heldKeys.contains(ev.keysym) && m_heldKeys.size() >= 256) {
@@ -911,7 +912,7 @@ void QVncClient::keyEvent()
                 eventModifiers |= Qt::KeypadModifier;
             QWindowSystemInterface::handleKeyEvent(nullptr,
                 ev.down ? QEvent::KeyPress : QEvent::KeyRelease,
-                ev.keycode, eventModifiers, text);
+                ev.keycode, eventModifiers, text, autoRepeat);
         }
         m_handleMsg = false;
     }
