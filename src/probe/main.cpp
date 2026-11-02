@@ -535,6 +535,12 @@ private:
             geometry.insert(QStringLiteral("grid_current_cell"),
                             localBounds(grid_->viewport(), grid_->visualRect(grid_->currentIndex())));
         QJsonArray reorderOrder;
+        QJsonArray popupActions;
+        if (auto *popup = qobject_cast<QMenu *>(QApplication::activePopupWidget())) {
+            geometry.insert(QStringLiteral("active_popup"), bounds(popup));
+            for (auto *action : popup->actions())
+                popupActions.append(action->text());
+        }
         if (interactionsOpen_ && reorderList_) {
             for (int row = 0; row < reorderList_->count(); ++row)
                 reorderOrder.append(reorderList_->item(row)->text());
@@ -566,6 +572,7 @@ private:
                                                    ? QApplication::focusWidget()->objectName()
                                                    : QString()},
             {QStringLiteral("menu_open"), menuOpen_},
+            {QStringLiteral("popup_actions"), popupActions},
             {QStringLiteral("clipboard_text"), QApplication::clipboard()->text()},
             {QStringLiteral("keyboard_modifiers"), int(QGuiApplication::keyboardModifiers())},
             {QStringLiteral("mouse_buttons"), int(QGuiApplication::mouseButtons())},

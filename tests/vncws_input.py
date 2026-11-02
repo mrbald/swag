@@ -161,6 +161,17 @@ async def checks(url: str, output: Path):
             return {'return_keycode': KEY_RETURN, 'keypad_enter_keycode': KEY_ENTER,
                     'keypad_modifier': KEYPAD, 'ordinary_after_keypad': CONTROL}
 
+        async def context_menu_key(rfb):
+            before = (await observed(output, lambda s: s['ready']))['raw_key_events']
+            await rfb.ws.send_bytes(key(True, 0xff67) + key(False, 0xff67))
+            state = await observed(output, lambda s: s['raw_key_events'] > before)
+            assert state['last_key_code'] == 0x01000055, state
+            assert state['last_key_modifiers'] == 0, state
+            # Dismiss any widget context menu before subsequent checks.
+            await rfb.ws.send_bytes(key(True, 0xff1b) + key(False, 0xff1b))
+            await observed(output, lambda s: not s['popup_actions'])
+            return {'keycode': 0x01000055}
+
         async def repeat_flags(rfb):
             async def down(keysym, code, repeat, modifiers=0):
                 before = (await observed(output, lambda s: s['ready']))['raw_key_events']
@@ -238,6 +249,7 @@ async def checks(url: str, output: Path):
         await run('autorepeat_flags_release_and_keypad', repeat_flags)
         await run('autorepeat_resets_on_disconnect', lambda r: repeat_reset(r, False))
         await run('autorepeat_resets_on_replacement', lambda r: repeat_reset(r, True))
+        await run('context_menu_key_mapping', context_menu_key)
     return results
 
 

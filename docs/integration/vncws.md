@@ -494,6 +494,15 @@ Evidence: `artifacts/qt-ws-slices/repeat-browser-*`, `repeat-wire`, `repeat-smok
 and `repeat-mdi` (65 passing checks). RFB carries no explicit repeat flag, so
 clients sending release/press pairs retain their distinct-press semantics.
 
+The Context Menu key now maps to `Qt::Key_Menu` and delivers the separate keyboard
+context-menu event, following [Qt's XCB backend](https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/plugins/platforms/xcb/qxcbkeyboard.cpp).
+Mapping alone delivered the key but did not open the editor menu. The full fix
+passes actual noVNC popup, Escape and subsequent typing checks against Tiger,
+22 wire input checks, 16 probe smoke checks and 10 original-app MDI checks.
+Evidence: `artifacts/qt-ws-slices/menu-verified.json`. The earlier Tiger autorepeat
+comparison passed, but a later run intermittently classified duplicated key-downs
+as fresh presses; this reference limitation remains recorded in the evidence.
+
 The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
 The browser client is understood to be Chrome on a Windows VM, probably in Azure;
 Azure hosting is unconfirmed. This is close to the tested EL8 stack, but the exact

@@ -910,6 +910,17 @@ void QVncClient::keyEvent()
             Qt::KeyboardModifiers eventModifiers = m_keymod;
             if (ev.keysym >= 0xff80 && ev.keysym <= 0xffbd)
                 eventModifiers |= Qt::KeypadModifier;
+#ifndef QT_NO_CONTEXTMENU
+            // Like Qt's XCB backend, a Menu press delivers both the keyboard
+            // context-menu request and the ordinary key event.
+            if (ev.down && ev.keycode == Qt::Key_Menu) {
+                if (QWindow *window = QGuiApplication::focusWindow()) {
+                    const QPoint globalPos = m_lastPointerPos.toPoint();
+                    QWindowSystemInterface::handleContextMenuEvent(window, false,
+                        window->mapFromGlobal(globalPos), globalPos, eventModifiers);
+                }
+            }
+#endif
             QWindowSystemInterface::handleKeyEvent(nullptr,
                 ev.down ? QEvent::KeyPress : QEvent::KeyRelease,
                 ev.keycode, eventModifiers, text, autoRepeat);

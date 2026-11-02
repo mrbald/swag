@@ -25,6 +25,8 @@ class FixtureActor(workspace.Actor):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--backend', choices=('qt-ws', 'tiger'), default='qt-ws')
+    parser.add_argument('--context-menu-only', action='store_true',
+                        help='Run only the context-menu browser comparison')
     parser.add_argument('--engine', default='podman')
     parser.add_argument('--port', type=int, default=6290)
     parser.add_argument('--workspace-origin')
@@ -84,6 +86,25 @@ def main():
             passed()
 
             if not args.workspace_origin:
+                current = 'keyboard_context_menu'
+                click('multiline_editor')
+                page.keyboard.press('Control+End')
+                before = actor.state()
+                page.keyboard.press('ContextMenu')
+                state = actor.wait(lambda s: bool(s.get('popup_actions')))
+                assert any('Copy' in action for action in state['popup_actions']), state
+                page.screenshot(path=str(output/'context-menu.png'))
+                page.keyboard.press('Escape')
+                actor.wait(lambda s: not s['popup_actions'])
+                page.keyboard.press('z')
+                actor.wait(lambda s: s['multiline_text'] == before['multiline_text']+'z')
+                passed(popup_actions=state['popup_actions'])
+
+                if args.context_menu_only:
+                    click('interactions_close_button')
+                    actor.wait(lambda s: not s['interactions_open'])
+                    return
+
                 current = 'nonrepeating_shortcut_held_key'
                 click('key_input')
                 before = actor.state()

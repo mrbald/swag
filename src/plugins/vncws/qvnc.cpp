@@ -193,6 +193,7 @@ static const struct {
     { 0xff09, Qt::Key_Tab       },
     { 0xff0d, Qt::Key_Return    },
     { 0xff1b, Qt::Key_Escape    },
+    { 0xff67, Qt::Key_Menu      },
     { 0xff63, Qt::Key_Insert    },
     { 0xffff, Qt::Key_Delete    },
     { 0xff50, Qt::Key_Home      },
