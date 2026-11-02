@@ -510,26 +510,31 @@ void QVncClient::checkUpdate()
         m_backpressureDeferred = true;
         return;
     }
-#if QT_CONFIG(cursor)
-    if (m_dirtyCursor && m_supportCursor && m_server->screen()->clientCursor) {
-        m_server->screen()->clientCursor->write(this);
-        if (m_state == Connected)
-            m_lastFramebufferUpdate.start();
-        m_dirtyCursor = false;
-        m_wantUpdate = false;
-        return;
-    }
-#endif
     const QRegion sendRegion = dirtyRegion();
+    bool includeCursor = false;
+#if QT_CONFIG(cursor)
+    includeCursor = m_dirtyCursor && m_supportCursor && m_server->screen()->clientCursor;
+#endif
     if (!sendRegion.isEmpty()) {
-        if (m_encoder) {
-            m_encoder->write();
-            if (m_state == Connected)
-                m_lastFramebufferUpdate.start();
+        if (!m_encoder || !m_encoder->write(includeCursor) || m_state != Connected) {
+            close();
+            return;
         }
-        m_wantUpdate = false;
-        m_dirtyRegion -= sendRegion;
+    } else if (includeCursor) {
+#if QT_CONFIG(cursor)
+        if (!m_server->screen()->clientCursor->writeUpdate(this) || m_state != Connected) {
+            close();
+            return;
+        }
+#endif
+    } else {
+        return; // An incremental request waits for the next dirty rectangle.
     }
+    m_lastFramebufferUpdate.start();
+    m_dirtyRegion -= sendRegion;
+    if (includeCursor)
+        m_dirtyCursor = false;
+    m_wantUpdate = false;
 }
 
 void QVncClient::sendEmptyUpdate()

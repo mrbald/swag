@@ -111,7 +111,7 @@ public:
     }
 
     void read(QIODevice *s);
-    void write(QIODevice *s) const;
+    bool write(QIODevice *s) const;
 
     quint16 x;
     quint16 y;
@@ -214,7 +214,7 @@ public:
     QRfbEncoder(QVncClient *s) : client(s) {}
     virtual ~QRfbEncoder() {}
 
-    virtual void write() = 0;
+    virtual bool write(bool includeCursor) = 0;
 
 protected:
     QVncClient *client;
@@ -226,10 +226,10 @@ public:
     QRfbRawEncoder(QVncClient *s) : QRfbEncoder(s) {}
     ~QRfbRawEncoder() override;
 
-    void write() override;
+    bool write(bool includeCursor) override;
 
 private:
-    bool writeZlib(const QImage &image, const QRegion &region);
+    bool writeZlib(const QImage &image, const QRegion &region, bool includeCursor);
     QByteArray buffer;
     z_stream zlibStream{};
     bool zlibInitialized = false;
@@ -384,7 +384,9 @@ public:
     QVncClientCursor();
     ~QVncClientCursor();
 
-    void write(QVncClient *client) const;
+    bool writeUpdate(QVncClient *client) const;
+    bool writeRect(QVncClient *client, QIODevice *socket) const;
+    qint64 wireBytes(const QVncClient *client) const;
 
     void changeCursor(QCursor *widgetCursor, QWindow *window) override;
 

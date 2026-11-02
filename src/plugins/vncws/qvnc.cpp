@@ -37,6 +37,7 @@
 **
 ****************************************************************************/
 #include "qvnc_p.h"
+#include <QtCore/QBuffer>
 #include "qvncscreen.h"
 #include "qvncclient.h"
 #include "qvncwebsocketstream.h"
@@ -265,14 +266,14 @@ void QRfbRect::read(QIODevice *s)
     h = ntohs(buf[3]);
 }
 
-void QRfbRect::write(QIODevice *s) const
+bool QRfbRect::write(QIODevice *s) const
 {
     quint16 buf[4];
     buf[0] = htons(x);
     buf[1] = htons(y);
     buf[2] = htons(w);
     buf[3] = htons(h);
-    s->write((char*)buf, 8);
+    return s->write((char*)buf, 8) == 8;
 }
 
 void QRfbPixelFormat::read(QIODevice *s)
@@ -478,7 +479,8 @@ QRfbRawEncoder::~QRfbRawEncoder()
         deflateEnd(&zlibStream);
 }
 
-bool QRfbRawEncoder::writeZlib(const QImage &screenImage, const QRegion &region)
+bool QRfbRawEncoder::writeZlib(const QImage &screenImage, const QRegion &region,
+                              bool includeCursor)
 {
     constexpr int MaxStagedBytes = 12 * 1024 * 1024;
     try {
@@ -492,7 +494,7 @@ bool QRfbRawEncoder::writeZlib(const QImage &screenImage, const QRegion &region)
         }
 
         QByteArray packet(4, '\0');
-        qToBigEndian(quint16(region.rectCount()),
+        qToBigEndian(quint16(region.rectCount() + int(includeCursor)),
                     reinterpret_cast<uchar *>(packet.data() + 2));
         for (const QRect &rect : region) {
             const int rowBytes = rect.width() * client->clientBytesPerPixel();
@@ -536,6 +538,23 @@ bool QRfbRawEncoder::writeZlib(const QImage &screenImage, const QRegion &region)
             packet.append(header, 16);
             packet.append(compressed);
         }
+#if QT_CONFIG(cursor)
+        if (includeCursor) {
+            const qint64 cursorBytes = client->server()->screen()->clientCursor->wireBytes(client);
+            if (cursorBytes < 0 || cursorBytes > MaxStagedBytes - packet.size()) {
+                qWarning("vncws: cursor exceeds framebuffer staging limit");
+                client->close();
+                return false;
+            }
+            QBuffer cursorBuffer(&packet);
+            if (!cursorBuffer.open(QIODevice::Append) ||
+                !client->server()->screen()->clientCursor->writeRect(client, &cursorBuffer)) {
+                qWarning("vncws: cannot stage cursor in framebuffer update");
+                client->close();
+                return false;
+            }
+        }
+#endif
         if (client->clientSocket()->write(packet) != packet.size()) {
             client->close();
             return false;
@@ -548,7 +567,7 @@ bool QRfbRawEncoder::writeZlib(const QImage &screenImage, const QRegion &region)
     }
 }
 
-void QRfbRawEncoder::write()
+bool QRfbRawEncoder::write(bool includeCursor)
 {
 //    QVncDirtyMap *map = server->dirtyMap();
     QIODevice *socket = client->clientSocket();
@@ -560,12 +579,11 @@ void QRfbRawEncoder::write()
     const QImage screenImage = client->server()->screenImage();
     QRegion rgn = client->dirtyRegion();
     rgn &= QRect(0, 0, screenImage.width(), screenImage.height());
-    if (rgn.rectCount() > 4096)
+    if (rgn.rectCount() > (includeCursor ? 4095 : 4096))
         rgn = rgn.boundingRect();
     qCDebug(lcVnc) << "QRfbRawEncoder::write()" << rgn;
     if (client->useZlib()) {
-        writeZlib(screenImage, rgn);
-        return;
+        return writeZlib(screenImage, rgn, includeCursor);
     }
 //    if (map) {
 //        for (int y = 0; y < map->mapHeight; ++y) {
@@ -586,24 +604,33 @@ void QRfbRawEncoder::write()
 
     {
         const char tmp[2] = { 0, 0 }; // msg type, padding
-        socket->write(tmp, sizeof(tmp));
+        if (socket->write(tmp, sizeof(tmp)) != sizeof(tmp)) {
+            client->close();
+            return false;
+        }
     }
 
     {
-        const quint16 count = htons(rectsInRegion);
-        socket->write((char *)&count, sizeof(count));
+        const quint16 count = htons(quint16(rectsInRegion + int(includeCursor)));
+        if (socket->write((char *)&count, sizeof(count)) != sizeof(count)) {
+            client->close();
+            return false;
+        }
     }
-
-    if (rectsInRegion <= 0)
-        return;
 
     for (const QRect &tileRect: rgn) {
         const QRfbRect rect(tileRect.x(), tileRect.y(),
                             tileRect.width(), tileRect.height());
-        rect.write(socket);
+        if (!rect.write(socket)) {
+            client->close();
+            return false;
+        }
 
         const quint32 encoding = htonl(0); // raw encoding
-        socket->write((char *)&encoding, sizeof(encoding));
+        if (socket->write((char *)&encoding, sizeof(encoding)) != sizeof(encoding)) {
+            client->close();
+            return false;
+        }
 
         int linestep = screenImage.bytesPerLine();
         const uchar *screendata = screenImage.scanLine(rect.y)
@@ -622,16 +649,29 @@ void QRfbRawEncoder::write()
                 screendata += linestep;
                 b += bstep;
             }
-            socket->write(buffer.constData(), bufferSize);
+            if (socket->write(buffer.constData(), bufferSize) != bufferSize) {
+                client->close();
+                return false;
+            }
         } else {
             for (int i = 0; i < rect.h; ++i) {
-                socket->write((const char*)screendata, rect.w * bytesPerPixel);
+                const int rowBytes = rect.w * bytesPerPixel;
+                if (socket->write((const char*)screendata, rowBytes) != rowBytes) {
+                    client->close();
+                    return false;
+                }
                 screendata += linestep;
             }
         }
-        if (!socket->isOpen())
-            break;
     }
+#if QT_CONFIG(cursor)
+    if (includeCursor &&
+        !client->server()->screen()->clientCursor->writeRect(client, socket)) {
+        client->close();
+        return false;
+    }
+#endif
+    return true;
 }
 
 #if QT_CONFIG(cursor)
@@ -646,25 +686,47 @@ QVncClientCursor::~QVncClientCursor()
 {
 }
 
-void QVncClientCursor::write(QVncClient *client) const
+bool QVncClientCursor::writeUpdate(QVncClient *client) const
 {
+    if (wireBytes(client) < 0)
+        return false;
     QIODevice *socket = client->clientSocket();
+    const char header[4] = {0, 0, 0, 1};
+    return socket->write(header, sizeof(header)) == sizeof(header) &&
+           writeRect(client, socket);
+}
 
-    // FramebufferUpdate header
-    {
-        const quint16 tmp[6] = { htons(0),
-                                 htons(1),
-                                 htons(uint16_t(hotspot.x())), htons(uint16_t(hotspot.y())),
-                                 htons(uint16_t(cursor.width())),
-                                 htons(uint16_t(cursor.height())) };
-        socket->write((char*)tmp, sizeof(tmp));
+qint64 QVncClientCursor::wireBytes(const QVncClient *client) const
+{
+    constexpr qint64 MaxCursorWireBytes = 1024 * 1024;
+    const qint64 width = cursor.width();
+    const qint64 height = cursor.height();
+    if (width < 0 || height < 0 || width > 65535 || height > 65535)
+        return -1;
+    const qint64 payloadBytes = width * height * client->clientBytesPerPixel() +
+                                ((width + 7) / 8) * height;
+    if (payloadBytes > MaxCursorWireBytes - 12)
+        return -1;
+    return 12 + payloadBytes;
+}
 
-        const qint32 encoding = qToBigEndian(-239);
-        socket->write((char*)(&encoding), sizeof(encoding));
-    }
+bool QVncClientCursor::writeRect(QVncClient *client, QIODevice *socket) const
+{
+    if (wireBytes(client) < 0)
+        return false;
+    const qint64 width = cursor.width();
+    const qint64 height = cursor.height();
+    char rect[12];
+    qToBigEndian(quint16(hotspot.x()), reinterpret_cast<uchar *>(rect));
+    qToBigEndian(quint16(hotspot.y()), reinterpret_cast<uchar *>(rect + 2));
+    qToBigEndian(quint16(width), reinterpret_cast<uchar *>(rect + 4));
+    qToBigEndian(quint16(height), reinterpret_cast<uchar *>(rect + 6));
+    qToBigEndian(quint32(-239), reinterpret_cast<uchar *>(rect + 8));
+    if (socket->write(rect, sizeof(rect)) != sizeof(rect))
+        return false;
 
     if (cursor.isNull())
-        return;
+        return true;
 
     // write pixels
     Q_ASSERT(cursor.hasAlphaChannel());
@@ -673,7 +735,10 @@ void QVncClientCursor::write(QVncClient *client) const
     char *buffer = new char[n];
     for (int i = 0; i < img.height(); ++i) {
         client->convertPixels(buffer, (const char*)img.scanLine(i), img.width());
-        socket->write(buffer, n);
+        if (socket->write(buffer, n) != n) {
+            delete[] buffer;
+            return false;
+        }
     }
     delete[] buffer;
 
@@ -681,9 +746,12 @@ void QVncClientCursor::write(QVncClient *client) const
     const QImage bitmap = cursor.createAlphaMask().convertToFormat(QImage::Format_Mono);
     Q_ASSERT(bitmap.depth() == 1);
     Q_ASSERT(bitmap.size() == img.size());
-    const int width = (bitmap.width() + 7) / 8;
-    for (int i = 0; i < bitmap.height(); ++i)
-        socket->write((const char*)bitmap.scanLine(i), width);
+    const int maskWidth = (bitmap.width() + 7) / 8;
+    for (int i = 0; i < bitmap.height(); ++i) {
+        if (socket->write((const char*)bitmap.scanLine(i), maskWidth) != maskWidth)
+            return false;
+    }
+    return true;
 }
 
 void QVncClientCursor::changeCursor(QCursor *widgetCursor, QWindow *window)
