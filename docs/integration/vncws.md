@@ -507,6 +507,25 @@ empty clipboard behavior. Evidence: `artifacts/qt-ws-followups/clipboard-verifie
 The original application and probe binaries are unchanged; the plugin, noVNC hook
 and HTML shell changed. The four-frame demo was restored afterward.
 
+## Clean-runtime transplant qualification
+
+The installed probe and plugin passed on a fresh pinned AlmaLinux 8.10 aarch64
+image containing explicit runtime RPMs, without inheriting the build image's layers
+or environment. Qt base/gui `5.15.3-9.el8_10` and WebSockets `5.15.3-1.el8` match
+the build. The image contains no compiler, CMake/Ninja, development/static packages,
+X server or window manager, and no `LD_LIBRARY_PATH` override. Distribution Qt GUI
+still pulls in X11/OpenGL client libraries. These probe/plugin binaries resolve
+against the system libstdc++; a different application may need additional runtime
+libraries from its own toolchain.
+
+Artifact hashes match the qualified source image. `ldd` has no unresolved libraries
+and `/proc/1/maps` confirms the plugin is loaded. Four real noVNC checks pass:
+first frame, keyboard edit, clipboard roundtrip and Context Menu/Escape/typing.
+The initial screenshot was visually reviewed, including Japanese fallback glyphs.
+Evidence: `artifacts/qt-ws-followups/runtime/verified.json`; reproduce with
+[`tests/runtime/README.md`](../../tests/runtime/README.md). This proves the local
+installed-artifact path, not the unavailable client application's dependencies.
+
 ## Client qualification
 
 Repeated key-down messages now retain Qt's autorepeat flag. This honors

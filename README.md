@@ -55,7 +55,9 @@ your application can keep C++23/GCC Toolset 15.
    Replace the paths with your install prefix. This listens on `127.0.0.1:5900`
    and serves **binary WebSocket/RFB**, not an HTML page. Serve noVNC separately
    and route its WebSocket connection to this listener. This repository's tested
-   client is noVNC 1.7.0.
+   client is noVNC 1.7.0 with the small
+   [clipboard availability patch](tools/patch_novnc.py); an unpatched viewer
+   still connects but does not display unavailable-copy feedback.
 4. For multiple authenticated users, let the supervisor reserve a separate
    loopback listener per process/generation and pass its inherited descriptor as
    `QT_QPA_PLATFORM=vncws:fd=N`. Keep the supervisor's reservation until locked
@@ -70,6 +72,9 @@ native X11 handles, OpenGL/Quick/WebEngine and IMEs are not qualified. For a
 standalone plugin build, supervisor details and acceptance checks, see the
 [plugin integration guide](docs/integration/vncws.md); for application layout
 changes, see the [Qt porting guide](docs/integration/README.md).
+The [clean-runtime transplant fixture](tests/runtime/README.md) demonstrates the
+installed probe/plugin running on matching EL8 runtime RPMs without build tools,
+development packages or an X server. Adapt its dependency list to your executable.
 
 ## Authenticated workspace
 

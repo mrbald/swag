@@ -1,0 +1,36 @@
+# Build installed artifacts elsewhere; qualify them on a fresh runtime base.
+# Pass an immutable image ID/tag from the accepted standalone-plugin build.
+ARG QUALIFIED_IMAGE=localhost/swag-probe-ws:dev
+FROM ${QUALIFIED_IMAGE} AS installed
+
+FROM docker.io/library/almalinux:8.10@sha256:8b469a3a78515e8a18ea8fc727e6a3679e1d0c5ba6f58d5b30be3d0d9b86cffe
+ARG QTBASE_VERSION=5.15.3-9.el8_10
+ARG QTWEBSOCKETS_VERSION=5.15.3-1.el8
+# Python serves the unchanged static noVNC fixture only. Qt needs no Python,
+# compiler, development headers, static support archives, X server or WM here.
+# Qt GUI's distribution RPM still depends on X11/OpenGL client libraries.
+RUN dnf -y --enablerepo=powertools --setopt=install_weak_deps=False install \
+       qt5-qtbase-${QTBASE_VERSION} qt5-qtbase-gui-${QTBASE_VERSION} \
+       qt5-qtwebsockets-${QTWEBSOCKETS_VERSION} \
+       libxkbcommon zlib fontconfig freetype \
+       dejavu-sans-fonts google-noto-sans-cjk-jp-fonts python3.12 \
+    && dnf clean all && rm -rf /var/cache/dnf
+
+COPY --from=installed /opt/swag/bin/swag-probe /opt/swag/bin/swag-probe
+COPY --from=installed /opt/swag/plugins/platforms/libqvncws.so /opt/swag/plugins/platforms/libqvncws.so
+COPY --from=installed /opt/swag/image-manifest.json /opt/swag/build-image-manifest.json
+COPY --from=installed /opt/novnc /opt/novnc
+RUN mkdir -p /artifacts /run/swag \
+    && chown 1000:1000 /artifacts /run/swag && chmod 0700 /run/swag \
+    && rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' > /opt/swag/runtime-packages.txt
+
+ENV LANG=C.UTF-8 QT_STYLE_OVERRIDE=Fusion \
+    QT_PLUGIN_PATH=/opt/swag/plugins \
+    QT_QPA_PLATFORM=vncws:addr=0.0.0.0:size=1280x800:port=5900 \
+    QT_FORCE_STDERR_LOGGING=1 XDG_RUNTIME_DIR=/run/swag \
+    SWAG_USER=runtime-probe SWAG_GENERATION=1 \
+    SWAG_STATE_FILE=/artifacts/state.json
+USER 1000:1000
+WORKDIR /opt/swag
+EXPOSE 5900 6080
+ENTRYPOINT ["/opt/swag/bin/swag-probe"]
