@@ -305,6 +305,7 @@ protected:
         } else if (event->type() == QEvent::Wheel) {
             const auto *wheel = static_cast<QWheelEvent *>(event);
             ++wheelEvents_;
+            lastWheelModifiers_ = int(wheel->modifiers());
             record(QStringLiteral("wheel:%1,%2").arg(wheel->angleDelta().x()).arg(wheel->angleDelta().y()));
         }
         return QMainWindow::eventFilter(watched, event);
@@ -431,6 +432,7 @@ private:
             {QStringLiteral("grid_editing"), grid_->isEditing()},
             {QStringLiteral("key_events"), keyEvents_},
             {QStringLiteral("wheel_events"), wheelEvents_},
+            {QStringLiteral("last_wheel_modifiers"), lastWheelModifiers_},
             {QStringLiteral("last_key"), lastKey_}
         };
         QSaveFile file(stateFile_);
@@ -472,6 +474,7 @@ private:
     int sequence_{};
     int keyEvents_{};
     int wheelEvents_{};
+    int lastWheelModifiers_{};
     QString lastEvent_;
     QString lastKey_;
 };

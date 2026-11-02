@@ -173,6 +173,48 @@ class Probe:
             return {"scroll_row": state["scroll_row"], "wheel_events": state["wheel_events"]}
         self.check("wheel_scroll", wheel)
 
+        def horizontal_wheel():
+            self.click("grid_viewport")
+            try:
+                self.page.keyboard.press("Control+Home")
+                self.wait(lambda state: state["scroll_row"] == 0 and
+                          state["current_row"] == 0 and state["current_column"] == 0)
+                rect = self.clip("grid_viewport")
+                self.page.mouse.move(rect["x"] + 200, rect["y"] + 100)
+                before = self.screenshot("horizontal-wheel-before", "grid_viewport")
+                initial = self.state()
+                viewport = initial["geometry"]["grid_viewport"]
+                start_x = initial["geometry"]["grid_current_cell"][0] - viewport[0]
+
+                def cell_x(state):
+                    geometry = state["geometry"]
+                    if (geometry["grid_viewport"] != viewport or
+                            (state["current_row"], state["current_column"]) != (0, 0)):
+                        return None
+                    return geometry["grid_current_cell"][0] - viewport[0]
+
+                self.page.mouse.wheel(60, 0)
+                right = self.wait(lambda state: state["wheel_events"] > initial["wheel_events"] and
+                                  cell_x(state) is not None and cell_x(state) < start_x)
+                right_x = cell_x(right)
+                after = self.screenshot("horizontal-wheel-right", "grid_viewport")
+                assert before != after, "grid canvas did not move horizontally"
+
+                self.page.mouse.wheel(-60, 0)
+                restored = self.wait(lambda state: state["wheel_events"] > right["wheel_events"] and
+                                     cell_x(state) is not None and abs(cell_x(state) - start_x) <= 1)
+                self.screenshot("horizontal-wheel-restored", "grid_viewport")
+                return {"cell_x_before": start_x, "cell_x_after_right": right_x,
+                        "cell_x_after_left": cell_x(restored),
+                        "visual_evidence": ["horizontal-wheel-before.png", "horizontal-wheel-right.png",
+                                            "horizontal-wheel-restored.png"]}
+            finally:
+                try:
+                    self.page.keyboard.press("Control+End")
+                finally:
+                    self.page.keyboard.press("Control+Home")
+        self.check("horizontal_wheel_scroll", horizontal_wheel)
+
         def edit_grid():
             self.click("grid_viewport")
             self.page.keyboard.press("Control+Home")
@@ -202,19 +244,25 @@ class Probe:
             self.screenshot("selection-color", "grid_current_cell")
             rect = self.state()["geometry"]["grid_current_cell"]
             # Read rendered canvas pixels only. The probe stylesheet specifies
-            # #195fc2; RFB must not exchange the red and blue channels.
+            # #195fc2; RFB must not exchange the red and blue channels. Tiger's
+            # Tight JPEG path is lossy, while qt-ws must retain exact RGB.
+            tolerance = 8 if self.backend == "tiger" else 0
             correct = self.page.locator("#screen canvas").evaluate("""
-                (canvas, rect) => {
+                (canvas, {rect, tolerance}) => {
                     const pixels = canvas.getContext('2d').getImageData(...rect).data;
                     let count = 0;
                     for (let i = 0; i < pixels.length; i += 4)
-                        if (pixels[i] === 25 && pixels[i+1] === 95 && pixels[i+2] === 194)
+                        if (Math.abs(pixels[i]-25) <= tolerance &&
+                            Math.abs(pixels[i+1]-95) <= tolerance &&
+                            Math.abs(pixels[i+2]-194) <= tolerance &&
+                            pixels[i+2] > pixels[i]+80)
                             count++;
                     return count;
                 }
-            """, rect)
+            """, {"rect": rect, "tolerance": tolerance})
             assert correct > 100, f"expected blue selection pixels, found {correct}"
-            return {"selection_rgb": [25, 95, 194], "matching_pixels": correct}
+            return {"selection_rgb": [25, 95, 194], "rgb_tolerance": tolerance,
+                    "matching_pixels": correct}
         self.check("selection_color", selection_color)
 
         def unicode_input():

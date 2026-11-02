@@ -834,18 +834,18 @@ void QVncClient::pointerEvent()
         else if (int(ev.buttons) < int(m_buttonState))
             type = QEvent::MouseButtonRelease;
         QWindowSystemInterface::handleMouseEvent(nullptr, pos, pos, ev.buttons, Qt::MouseButton(buttonStateChange),
-                                                 type, QGuiApplication::keyboardModifiers());
+                                                 type, m_keymod);
         m_buttonState = ev.buttons;
         if (ev.wheelMask) {
             QWindow *target = QGuiApplication::topLevelAt(pos.toPoint());
             const QPointF local = target ? target->mapFromGlobal(pos.toPoint()) : pos;
-            const QPoint delta((ev.wheelMask & 0x20 ? -120 : 0) +
-                               (ev.wheelMask & 0x40 ? 120 : 0),
+            const QPoint delta((ev.wheelMask & 0x20 ? 120 : 0) +
+                               (ev.wheelMask & 0x40 ? -120 : 0),
                                (ev.wheelMask & 0x08 ? 120 : 0) +
                                (ev.wheelMask & 0x10 ? -120 : 0));
             QWindowSystemInterface::handleWheelEvent(
                 target, local, pos,
-                QPoint(), delta, QGuiApplication::keyboardModifiers());
+                QPoint(), delta, m_keymod);
         }
         m_handleMsg = false;
     }
@@ -861,15 +861,6 @@ void QVncClient::keyEvent()
             close();
             return;
         }
-        if (ev.keycode == Qt::Key_Shift)
-            m_keymod = ev.down ? m_keymod | Qt::ShiftModifier :
-                                 m_keymod & ~Qt::ShiftModifier;
-        else if (ev.keycode == Qt::Key_Control)
-            m_keymod = ev.down ? m_keymod | Qt::ControlModifier :
-                                 m_keymod & ~Qt::ControlModifier;
-        else if (ev.keycode == Qt::Key_Alt)
-            m_keymod = ev.down ? m_keymod | Qt::AltModifier :
-                                 m_keymod & ~Qt::AltModifier;
         if (ev.unicode || ev.keycode) {
             const uint codepoint = uint(ev.unicode);
             const QString text = ev.unicode ? QString::fromUcs4(&codepoint, 1) : QString();
@@ -882,6 +873,19 @@ void QVncClient::keyEvent()
                 m_heldKeys.insert(ev.keysym, HeldKey{ev.keycode, text});
             else
                 m_heldKeys.remove(ev.keysym);
+            // RFB distinguishes left and right keysyms, while Qt combines
+            // their modifier bits. Derive the bits from held wire keys so a
+            // release of one side does not clear the other side.
+            m_keymod = Qt::NoModifier;
+            for (const HeldKey &held : qAsConst(m_heldKeys)) {
+                switch (held.keycode) {
+                case Qt::Key_Shift: m_keymod |= Qt::ShiftModifier; break;
+                case Qt::Key_Control: m_keymod |= Qt::ControlModifier; break;
+                case Qt::Key_Alt: m_keymod |= Qt::AltModifier; break;
+                case Qt::Key_Meta: m_keymod |= Qt::MetaModifier; break;
+                default: break;
+                }
+            }
             QWindowSystemInterface::handleKeyEvent(nullptr,
                 ev.down ? QEvent::KeyPress : QEvent::KeyRelease,
                 ev.keycode, m_keymod, text);

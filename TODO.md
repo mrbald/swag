@@ -28,3 +28,6 @@ Root maintains this checklist. No separate task system.
 - [x] Add negotiated lossless framebuffer compression and bounded update pacing with Raw fallback.
 - [x] Verify compressed pixels, negotiation/stream lifetime and slow-reader recovery; rerun browser regressions and compare the same WAN profiles.
 - [x] Diagnose and reduce the local-latency regression without losing bounded pacing or WAN compression gains; rerun focused correctness and network gates.
+- [x] Fix stale input modifiers and horizontal wheel direction; verify wire ordering and real noVNC input.
+- [ ] Keep each Qt listener reserved through manager-controlled generation teardown; verify endpoint-reuse races and failure cleanup.
+- [ ] Remove the private Qt heartbeat timeout; verify recovery after a GUI stall, run focused regression gates and restore the MDI demo.
