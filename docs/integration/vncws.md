@@ -44,7 +44,8 @@ RFB 3.3 with little-endian RGB888 in either tested channel order; negotiated
 lossless zlib framebuffer encoding with Raw fallback;
 negotiated UTF-8 clipboard with Latin-1 fallback. The RFB handshake deadline is 10 seconds. Input messages/queue
 are capped at 1 MiB, output queue at 16 MiB, encoding hints and distinct held
-keys at 256. Updates coalesce for about 16 ms and pause above 1 MiB of local
+keys at 256. Successive pixel updates are spaced by 16 ms; after idle the next
+update is queued immediately. Updates pause above 1 MiB of local
 WebSocket output backlog, resuming below 512 KiB. Compressed updates are staged
 under a 12 MiB cap before sending. The 16 MiB hard output cap still disconnects
 an overflowing viewer; this is bounded local-transport pacing, not adaptive WAN
@@ -247,7 +248,7 @@ Total downstream traffic fell from 43–48 MiB to 0.94–0.96 MiB per profile
 (97.75–98.06% reduction). Qt RSS was 66–67 MiB after selections and their CPU
 cost was 0.11–0.18 seconds. The slower-link improvement is substantial; local
 selection latency increased by about 63 ms with this compressed/paced path.
-Low-RTT tuning remains useful, and these twelve-sample observations do not qualify
+That regression motivated the follow-up below. These twelve-sample observations do not qualify
 production tail latency, concurrent users or a real Windows/RDP network path.
 
 Verification passed: 14 new compression/pressure wire checks, 26 existing protocol,
@@ -268,6 +269,47 @@ diagnosed harness failures and are not the accepted qualification runs.
 .venv/bin/python tests/browser/network.py --samples 12 \
   --output artifacts/qt-ws-compression/network-final
 ```
+
+### Local-latency follow-up
+
+On 2026-11-02, the compressed baseline reproduced at 95.83 ms local median.
+Browser WebSocket timing located most of the delay before the framebuffer arrived,
+with no cursor-only updates during measured selections. Enabling Linux
+`TCP_NODELAY` alone reduced the median to 51.34 ms; pointer-send-to-frame-arrival
+fell from 73.89 to 29.96 ms. The plugin sets this on the listening socket through
+Qt's public native descriptor; Linux copies the option to accepted connections.
+Failure logs a warning and retains functional startup. No new dependency or
+deployment setting is required.
+
+The scheduler now measures the 16 ms interval from the previous emitted update,
+allowing an idle update on the next event-loop turn while retaining burst pacing
+and transport backpressure. The final unchanged browser workload measured:
+
+| Added RTT; download/upload cap | Previous compressed median | New median / p95 | Resize paint |
+| --- | --- | --- | --- |
+| 0 ms; unlimited | 98 ms | 32 / 55 ms | 0.07 s |
+| 50 ms; 20 / 5 Mbps | 142 ms | 130 / 159 ms | 0.24 s |
+| 100 ms; 5 / 1 Mbps | 244 ms | 275 / 362 ms | 0.52 s |
+
+The local regression is removed. The slowest profile's median increased while
+its p95 decreased; twelve samples are insufficient to establish tail-latency
+guarantees. Total downstream traffic was 1.05–1.07 MiB per profile, still about
+98% below Raw, but modestly higher than the earlier compressed run. Earlier
+painting can result in more separate updates. Qt RSS remained 66–67 MiB, and
+selection-workload CPU use was 0.12–0.25 seconds.
+
+All 73 focused checks passed: 26 startup, 15 compression/protocol, 14 probe browser,
+10 MDI and 8 resize browser checks. The new startup check observes the option on
+the listener configured by Qt and verifies an accepted connection inherits it.
+Twelve tiny updates took 189 ms from first to last, confirming burst limiting;
+the paused-reader recovery gate also passed. Application and noVNC hashes match
+the previous compressed image, and both application and standalone plugin image
+builds passed. All three network profiles passed with complete byte accounting.
+
+Evidence: `artifacts/qt-ws-latency/verified-summary.json`, `comparison.json`,
+`network-final/results.json`, `baseline-frame-timing.json`, `baseline/`, `nodelay/`
+and `image-proof.json`. The retained pre-change image is
+`localhost/swag-app-ws:compressed-baseline`.
 
 ## Client qualification
 

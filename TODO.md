@@ -27,3 +27,4 @@ Root maintains this checklist. No separate task system.
 - [x] Measure realistic network/performance profiles through the deployed browser/proxy/session path and record remaining limits.
 - [x] Add negotiated lossless framebuffer compression and bounded update pacing with Raw fallback.
 - [x] Verify compressed pixels, negotiation/stream lifetime and slow-reader recovery; rerun browser regressions and compare the same WAN profiles.
+- [x] Diagnose and reduce the local-latency regression without losing bounded pacing or WAN compression gains; rerun focused correctness and network gates.
