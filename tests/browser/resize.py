@@ -111,6 +111,50 @@ def main():
             actor.screenshot("resized-desktop")
             passed(sizes=measured, frame_count=len(original_forms), same_process=True)
 
+            if args.render_backend == 'qt-ws':
+                current = 'ultrawide_native_and_scaled_fallback'
+                page = actor.page
+                page.set_viewport_size({'width':3440, 'height':1440})
+                native = fitted()
+                assert native[0] == 3440 and native[1] >= 1400, native
+                page.locator('#display-notice').wait_for(state='hidden')
+                retained()
+                # A real click enters fullscreen: the toolbar overlays rather
+                # than subtracting pixels from the native framebuffer.
+                page.locator('#fullscreen').click()
+                page.wait_for_function('!!document.fullscreenElement')
+                assert fitted() == [3440,1440]
+                retained()
+                page.mouse.move(8,8)
+                page.locator('#fullscreen').click()
+                page.wait_for_function('!document.fullscreenElement')
+                fitted()
+                for width in (4097,3840):
+                    page.set_viewport_size({'width':width,'height':1440})
+                    page.locator('#display-notice').wait_for(state='visible')
+                    page.wait_for_timeout(700)
+                    assert actor.framebuffer_size() == native
+                    assert page.locator('#status').inner_text() == 'Connected'
+                    retained()
+                page.set_viewport_size({'width':3440,'height':1440})
+                assert fitted() == native
+                page.locator('#display-notice').wait_for(state='hidden')
+                # Geometry-based click proves large-display coordinate mapping
+                # remains live after rejection prevention and scaled fallback.
+                actor.click('draft')
+                page.keyboard.press('End')
+                page.keyboard.type(' wide')
+                actor.wait(lambda s: s['draft'] == 'Browser resize note wide')
+                for _ in range(5):
+                    page.keyboard.press('Backspace')
+                actor.wait(lambda s: s['draft'] == 'Browser resize note')
+                retained()
+                actor.screenshot('ultrawide-native')
+                page.set_viewport_size({'width':1440,'height':1040})
+                fitted()
+                passed(native_fullscreen=[3440,1440], unsupported_viewports=[[4097,1440],[3840,1440]],
+                       same_process=True, input_after_fallback=True)
+
             current = "rapid_resize_preserves_final_geometry"
             for width, height in ((1200,900),(1600,1000),(1100,850),(1440,1040)):
                 actor.page.set_viewport_size({"width":width,"height":height})
@@ -119,15 +163,13 @@ def main():
             retained()
 
             if args.render_backend == "qt-ws":
-                current = "oversize_request_retains_display_and_recovers"
-                previous = actor.framebuffer_size()
+                current = "formerly_oversize_desktop_now_native"
                 actor.page.set_viewport_size({"width":2400,"height":1200})
-                actor.page.wait_for_timeout(1000)
-                assert actor.framebuffer_size() == previous
+                assert fitted() == [2400,1164]
                 assert actor.page.locator("#status").inner_text() == "Connected"
                 retained()
                 actor.page.set_viewport_size({"width":1440,"height":1040})
-                passed(framebuffer=fitted(), rejected_size=[2400,1200], same_process=True)
+                passed(framebuffer=fitted(), accepted_size=[2400,1164], same_process=True)
 
             current = "small_browser_scales_full_desktop"
             previous_size = actor.framebuffer_size()

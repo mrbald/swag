@@ -4,12 +4,12 @@
 <title>Portfolio workspace</title>
 <style>
 *{box-sizing:border-box}[hidden]{display:none!important}html,body{height:100%}body{margin:0;background:#263b4b;color:#183248;font:13px system-ui;overflow:hidden}
-button,input{font:inherit}button{border:1px solid #b6c7d2;border-radius:3px;padding:3px 9px;min-height:28px;cursor:pointer;background:white;color:#183248}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible{outline:2px solid #1976d2;outline-offset:2px}
+button,input,textarea{font:inherit}button{border:1px solid #b6c7d2;border-radius:3px;padding:3px 9px;min-height:28px;cursor:pointer;background:white;color:#183248}button:disabled{opacity:.5;cursor:default}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #1976d2;outline-offset:2px}
 #workspace{position:relative;display:flex;flex-direction:column;height:100%;width:100%;overflow:hidden;background:#263b4b}
 #bar{height:36px;flex-shrink:0;display:flex;align-items:center;gap:8px;padding:3px 8px;background:#edf2f6;border-bottom:1px solid #bccbd6;z-index:10}
 #brand{font-size:13px}#status{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#screen{flex:1;min-width:0;min-height:0;overflow:hidden}
 .panel{position:absolute;right:8px;top:40px;z-index:30;width:min(380px,calc(100% - 16px));padding:14px;background:white;border:1px solid #b6c7d2;border-radius:5px;box-shadow:0 4px 20px #102c4250}
-.panel h2{font-size:14px;margin:0 0 10px}.panel p{font-size:12px;margin:8px 0;color:#40566a}.panel .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}#clipboard{width:100%;padding:7px;border:1px solid #7e96aa;border-radius:3px}.panel #clipboard-error{color:#9b1c1c}#signout{width:100%;text-align:left}
+.panel h2{font-size:14px;margin:0 0 10px}.panel p{font-size:12px;margin:8px 0;color:#40566a}.panel .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}#clipboard{width:100%;padding:7px;border:1px solid #7e96aa;border-radius:3px;resize:vertical;max-height:40vh}.panel #clipboard-error{color:#9b1c1c}#signout{width:100%;text-align:left}
 #empty{color:#dbe6ee;display:grid;place-items:center;height:100%;font-size:18px;padding:16px;text-align:center}#reveal{display:none}
 #workspace:fullscreen{width:100vw;height:100vh}#workspace:fullscreen #screen{flex:none;position:absolute;inset:0}
 #workspace:fullscreen #bar{position:absolute;inset:0 0 auto;height:36px;transform:translateY(-100%);transition:transform .12s}
@@ -20,9 +20,9 @@ button,input{font:inherit}button{border:1px solid #b6c7d2;border-radius:3px;padd
 @media(prefers-reduced-motion:reduce){#workspace:fullscreen #bar{transition:none}}
 </style></head>
 <body><div id="workspace">
-<div id="bar" role="toolbar" aria-label="Workspace controls"><strong id="brand">Portfolio</strong><span id="status" role="status">Checking session…</span><button id="start" disabled>Start workspace</button><button id="clipboard-toggle" aria-expanded="false" aria-controls="clipboard-panel" disabled>Clipboard</button><button id="fullscreen" title="Enter full screen">Full screen</button><button id="account-toggle" aria-expanded="false" aria-controls="account-panel" aria-label="Account and session"><span id="user">Account</span> ▾</button></div>
+<div id="bar" role="toolbar" aria-label="Workspace controls"><strong id="brand">Portfolio</strong><span id="status" role="status">Checking session…</span><span id="display-notice" role="status" hidden title="The workspace supports up to 4096 pixels per side and 4,953,600 pixels in total.">Large display: scaling workspace to fit.</span><button id="start" disabled>Start workspace</button><button id="clipboard-toggle" aria-expanded="false" aria-controls="clipboard-panel" disabled>Clipboard</button><button id="fullscreen" title="Enter full screen">Full screen</button><button id="account-toggle" aria-expanded="false" aria-controls="account-panel" aria-label="Account and session"><span id="user">Account</span> ▾</button></div>
 <button id="reveal" aria-controls="bar" aria-expanded="false" title="Show workspace controls">Controls ▾</button>
-<section id="clipboard-panel" class="panel" role="dialog" aria-label="Clipboard" hidden><h2>Clipboard</h2><input id="clipboard" aria-label="Clipboard text" placeholder="Text to send or received from Qt"><p id="clipboard-error" role="alert" hidden></p><p>Send text here, then paste inside the application with Ctrl+V. Copied application text appears here.</p><div class="actions"><button id="paste">Send clipboard</button><button id="clipboard-close">Close</button></div></section>
+<section id="clipboard-panel" class="panel" role="dialog" aria-label="Clipboard" hidden><h2>Clipboard</h2><textarea id="clipboard" rows="5" aria-label="Clipboard text" placeholder="Text to send or received from Qt"></textarea><p id="clipboard-error" role="alert" hidden></p><p>Send text here, then paste inside the application with Ctrl+V. Copied application text appears here.</p><div class="actions"><button id="paste">Send clipboard</button><button id="clipboard-close">Close</button></div></section>
 <section id="account-panel" class="panel" role="dialog" aria-label="Account and session" hidden><h2>Session</h2><button id="signout">End session &amp; sign out</button><p>Ends this workspace, including unsaved edits. Identity-provider sign-in may remain active.</p><div class="actions"><button id="account-close">Close</button></div></section>
 <main id="screen"><div id="empty">Your workspace will appear here.</div></main>
 </div>
@@ -54,7 +54,7 @@ function scheduleHide(){
   clearTimeout(hideTimer);
   if(!fullscreen())return;
   hideTimer=setTimeout(()=>{
-    if(!viewerConnected||needsAttention||panel||$('bar').matches(':hover')||$('bar').contains(document.activeElement))return;
+    if(!viewerConnected||needsAttention||!$('display-notice').hidden||panel||$('bar').matches(':hover')||$('bar').contains(document.activeElement))return;
     $('workspace').classList.remove('controls-visible');$('reveal').setAttribute('aria-expanded','false');
   },1800);
 }
@@ -99,14 +99,18 @@ function resizeMode(current=rfb){
   if(!current)return;
   const {width,height}=$('screen').getBoundingClientRect();
   // Below a usable desktop size, scale the existing framebuffer in full.
-  const remote=width>=800&&height>=600;
+  const withinLimit=width<=4096&&height<=4096&&Math.floor(width)*Math.floor(height)<=4953600;
+  const remote=width>=800&&height>=600&&withinLimit;
+  const limited=viewerConnected&&!withinLimit;
+  $('display-notice').hidden=!limited;
+  if(limited)revealControls();
   if(current.resizeSession!==remote)current.resizeSession=remote;
 }
 // Install before RFB's own observer, so shrinking below the floor disables
 // remote resizing before it can request an unusably small framebuffer.
 const resizeObserver=new ResizeObserver(()=>resizeMode());resizeObserver.observe($('screen'));
 addEventListener('resize',()=>resizeMode());
-function disconnect(){viewerConnected=false;$('start').hidden=false;$('clipboard-toggle').disabled=true;if(rfb){const old=rfb;rfb=null;old.disconnect();}connectedGeneration=null;closePanel();revealControls();}
+function disconnect(){viewerConnected=false;$('display-notice').hidden=true;$('start').hidden=false;$('clipboard-toggle').disabled=true;if(rfb){const old=rfb;rfb=null;old.disconnect();}connectedGeneration=null;closePanel();revealControls();}
 function report(error){if(!(error instanceof ObsoleteRequest)&&!(error instanceof LoginExpired)&&!signingOut)status(error.message,true);}
 async function api(method='GET',path='/session',body){
   const startedAt=revision;
@@ -124,8 +128,8 @@ function attach(){
   $('empty')?.remove();connectedGeneration=session.generation;
   const socket=`${location.protocol==='https:'?'wss':'ws'}://${location.host}/viewer/${encodeURIComponent(session.generation)}/websockify`;
   const current=rfb=new RFB($('screen'),socket,{shared:true});current.scaleViewport=true;resizeMode(current);
-  current.addEventListener('connect',()=>{if(rfb===current){viewerConnected=true;$('clipboard-toggle').disabled=false;status('Connected',false);show();scheduleHide();}});
-  current.addEventListener('disconnect',()=>{if(rfb===current){rfb=null;viewerConnected=false;$('clipboard-toggle').disabled=true;closePanel();status('Viewer disconnected. Rejoin to take control.');$('start').hidden=false;$('start').textContent='Rejoin workspace';$('start').disabled=false;}});
+  current.addEventListener('connect',()=>{if(rfb===current){viewerConnected=true;$('clipboard-toggle').disabled=false;status('Connected',false);resizeMode(current);show();scheduleHide();}});
+  current.addEventListener('disconnect',()=>{if(rfb===current){rfb=null;viewerConnected=false;$('display-notice').hidden=true;$('clipboard-toggle').disabled=true;closePanel();status('Viewer disconnected. Rejoin to take control.');$('start').hidden=false;$('start').textContent='Rejoin workspace';$('start').disabled=false;}});
   current.addEventListener('clipboard',event=>{$('clipboard').value=event.detail.text;clearClipboardError();});
 }
 function show(){

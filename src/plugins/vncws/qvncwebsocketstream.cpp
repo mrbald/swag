@@ -10,7 +10,7 @@ QT_BEGIN_NAMESPACE
 
 namespace {
 constexpr qint64 MaxInputBytes = 1 * 1024 * 1024;
-constexpr qint64 MaxOutputBytes = 16 * 1024 * 1024;
+constexpr qint64 MaxOutputBytes = 32 * 1024 * 1024;
 }
 
 QVncWebSocketStream::QVncWebSocketStream(QWebSocket *socket, QObject *parent)

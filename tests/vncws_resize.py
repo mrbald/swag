@@ -108,12 +108,22 @@ async def checks(url, output):
 
         async def rejected_dimensions(rfb):
             before = rfb.size
-            for size in [(0,800),(63,800),(4096,800),(2048,2048)]:
+            for size in [(0,800),(63,800),(4097,800),(3440,1441),(4096,1210)]:
                 reply = await rfb.resize(*size)
                 assert reply['status'] == 3, reply
                 assert rfb.size == before
             assert (await rfb.pixels())['pixels']
             return {'unchanged_size':before}
+
+        async def ultrawide_boundary(rfb):
+            for size in ((3440,1440),(4096,1209),(2048,2048)):
+                reply = await rfb.resize(*size)
+                assert reply['status'] == 0 and rfb.size == size, reply
+                x, y = size[0]-2, size[1]-2
+                assert (await rfb.pixels(x,y,2,2))['pixels'] == [(x,y,2,2)]
+            reply = await rfb.resize(1280,800)
+            assert reply['status'] == 0 and rfb.size == (1280,800)
+            return {'accepted_sizes':[(3440,1440),(4096,1209),(2048,2048)]}
 
         async def rejected_layout(rfb):
             before = rfb.size
@@ -171,6 +181,7 @@ async def checks(url, output):
         await check('fragmented_resize_and_shrink_clipping', fragmented)
         await check('coalesced_resize_and_noop_ack_order', ordered)
         await check('invalid_dimensions_leave_display_usable', rejected_dimensions)
+        await check('ultrawide_and_maximum_area_resize', ultrawide_boundary)
         await check('unsupported_layouts_leave_display_usable', rejected_layout)
         await check('opaque_flags_and_takeover_size_preserved', flags_and_takeover)
         await check('nonincremental_requests_each_report_layout', repeated_nonincremental)

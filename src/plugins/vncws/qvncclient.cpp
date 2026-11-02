@@ -797,9 +797,7 @@ void QVncClient::setDesktopSize()
     };
     const int width = get16(1);
     const int height = get16(3);
-    const bool validSize = width >= 64 && width <= 2048 &&
-                           height >= 64 && height <= 2048 &&
-                           qint64(width) * height <= 2073600;
+    const bool validSize = QVncGeometryLimits::valid(width, height);
     const bool validLayout = count == 1 &&
                              get32(7) == m_server->screen()->screenId &&
                              get16(11) == 0 && get16(13) == 0 &&
@@ -906,9 +904,14 @@ void QVncClient::keyEvent()
                 default: break;
                 }
             }
+            // Keypad is a property of this wire key, not a held modifier.
+            // Keep m_keymod derived only from physically held modifier keys.
+            Qt::KeyboardModifiers eventModifiers = m_keymod;
+            if (ev.keysym >= 0xff80 && ev.keysym <= 0xffbd)
+                eventModifiers |= Qt::KeypadModifier;
             QWindowSystemInterface::handleKeyEvent(nullptr,
                 ev.down ? QEvent::KeyPress : QEvent::KeyRelease,
-                ev.keycode, m_keymod, text);
+                ev.keycode, eventModifiers, text);
         }
         m_handleMsg = false;
     }

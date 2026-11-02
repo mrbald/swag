@@ -17,6 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SHIFT = 0x02000000
 CONTROL = 0x04000000
 META = 0x10000000
+KEYPAD = 0x20000000
+KEY_RETURN = 0x01000004
+KEY_ENTER = 0x01000005
 
 
 def key(down: bool, keysym: int) -> bytes:
@@ -134,6 +137,30 @@ async def checks(url: str, output: Path):
             return {'after_disconnect_modifiers': released['keyboard_modifiers'],
                     'after_disconnect_buttons': released['mouse_buttons']}
 
+        async def keypad_identity_and_modifiers(rfb):
+            async def press(keysym, keycode, modifiers):
+                before = (await observed(output, lambda s: s['ready']))['raw_key_events']
+                await rfb.ws.send_bytes(key(True, keysym))
+                event = await observed(output, lambda s:
+                    s['raw_key_events'] > before and s['last_key_code'] == keycode and
+                    s['last_key_modifiers'] == modifiers)
+                await rfb.ws.send_bytes(key(False, keysym))
+                return event
+
+            await press(0xff0d, KEY_RETURN, 0)
+            await press(0xff8d, KEY_ENTER, KEYPAD)
+            await press(ord('1'), ord('1'), 0)
+            await press(0xffb1, ord('1'), KEYPAD)
+            await press(0xff95, 0x01000010, KEYPAD)  # keypad Home
+            await rfb.ws.send_bytes(key(True, 0xffe3))  # held Control
+            await observed(output, lambda s: s['keyboard_modifiers'] == CONTROL)
+            await press(0xff8d, KEY_ENTER, CONTROL | KEYPAD)
+            await press(ord('a'), ord('A'), CONTROL)
+            await rfb.ws.send_bytes(key(False, 0xffe3))
+            await observed(output, lambda s: s['keyboard_modifiers'] == 0)
+            return {'return_keycode': KEY_RETURN, 'keypad_enter_keycode': KEY_ENTER,
+                    'keypad_modifier': KEYPAD, 'ordinary_after_keypad': CONTROL}
+
         await run('ctrl_release_then_pointer',
                   lambda r: release_then_pointer(r, 0xffe3, CONTROL))
         await run('shift_release_then_pointer',
@@ -167,6 +194,8 @@ async def checks(url: str, output: Path):
                   lambda r: disconnect_releases_input(r, 0xffeb))
         await run('legacy_meta_disconnect_releases_multiple_buttons',
                   lambda r: disconnect_releases_input(r, 0xffe7))
+        await run('keypad_enter_identity_and_event_local_modifier',
+                  keypad_identity_and_modifiers)
     return results
 
 

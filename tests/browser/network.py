@@ -42,12 +42,17 @@ def main():
     parser.add_argument('--origin',default='http://localhost:6081')
     parser.add_argument('--output',type=Path,default=ROOT/'artifacts/qt-ws-network')
     parser.add_argument('--samples',type=int,default=12)
+    parser.add_argument('--width',type=int,default=1440)
+    parser.add_argument('--height',type=int,default=1040)
     parser.add_argument('--profile',choices=[p['name'] for p in PROFILES])
     parser.add_argument('--cursor-transitions',action='store_true',
                         help='also measure row paints after moving from a text cursor')
     args=parser.parse_args()
     if not 3 <= args.samples <= 100:
         parser.error('--samples must be between 3 and 100')
+    if not (800 <= args.width <= 4096 and 636 <= args.height <= 4096 and
+            args.width*args.height <= 4953600):
+        parser.error('viewport must fit the supported desktop envelope')
     selected=[p for p in PROFILES if args.profile is None or p['name']==args.profile]
     output=args.output.resolve()
     output.mkdir(parents=True,exist_ok=True)
@@ -137,8 +142,12 @@ print(json.dumps({'cpu_seconds':(int(s[11])+int(s[12]))/os.sysconf('SC_CLK_TCK')
                 for profile in selected:
                     set_profile(profile)
                     actor=workspace.Actor(browser,'alice',args.origin)
+                    actor.page.set_viewport_size({'width':args.width,'height':args.height})
                     actor.page.set_default_timeout(45000)
-                    result={'profile':profile,'status':'running'}
+                    viewer_sockets=[]
+                    actor.page.on('websocket',lambda socket: viewer_sockets.append(socket)
+                                  if '/viewer/' in socket.url else None)
+                    result={'profile':profile,'status':'running','viewport':[args.width,args.height]}
                     results.append(result)
                     try:
                         actor.login()
@@ -232,6 +241,16 @@ print(json.dumps({'cpu_seconds':(int(s[11])+int(s[12]))/os.sysconf('SC_CLK_TCK')
                         assert actor.page.locator('#status').inner_text()=='Connected'
                         result['status']='pass'
                         actor.api('DELETE')
+                        # The DELETE response and viewer close travel on separate
+                        # shaped connections. Do not destroy Chrome's context
+                        # while the viewer's trailing bytes are still in flight.
+                        deadline=time.monotonic()+15
+                        while viewer_sockets and not all(socket.is_closed() for socket in viewer_sockets):
+                            if time.monotonic()>=deadline:
+                                raise TimeoutError('viewer did not close after workspace teardown')
+                            actor.page.wait_for_timeout(50)
+                        assert viewer_sockets, 'no viewer WebSocket was observed'
+                        result['viewer_closed_before_context_cleanup']=True
                     except Exception as error:
                         result.update(status='fail',error=str(error))
                         actor.page.screenshot(path=str(output/(profile['name']+'-failure.png')))

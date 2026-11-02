@@ -52,10 +52,15 @@ def main():
     parser.add_argument('--engine', default='podman')
     parser.add_argument('--seconds', type=int, default=1800)
     parser.add_argument('--interval', type=float, default=10)
+    parser.add_argument('--width', type=int, default=1440)
+    parser.add_argument('--height', type=int, default=1040)
     parser.add_argument('--output', type=Path, default=workspace.ROOT/'artifacts/qt-ws-polish/soak')
     args = parser.parse_args()
     if args.seconds <= 0 or args.interval <= 0:
         parser.error('seconds and interval must be positive')
+    if not (800 <= args.width <= 4096 and 636 <= args.height <= 4096 and
+            args.width*args.height <= 4953600):
+        parser.error('viewport must fit the supported desktop envelope')
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     workspace.OUTPUT = output
@@ -114,6 +119,7 @@ def main():
         try:
             for user in ('alice', 'bob'):
                 actor = SoakActor(browser, user, args.origin)
+                actor.page.set_viewport_size({'width':args.width,'height':args.height})
                 actors[user] = actor
                 attach(actor)
                 actor.login()
@@ -154,7 +160,8 @@ def main():
                     actor.page.locator('#clipboard-close').click()
                     actor.click('draft'); actor.page.keyboard.press('Control+a'); actor.page.keyboard.press('Control+c')
                     actor.page.wait_for_function('text => document.querySelector("#clipboard").value === text', arg=token)
-                    size = {'width': 1440 if cycle % 2 else 1200, 'height': 1040 if cycle % 2 else 900}
+                    size = {'width': args.width if cycle % 2 else max(800,args.width-240),
+                            'height': args.height if cycle % 2 else max(636,args.height-140)}
                     actor.page.set_viewport_size(size)
                     workspace.wait_for(lambda: actor.framebuffer_size() == actor.page.locator('#screen').evaluate(
                         'e => [Math.floor(e.clientWidth),Math.floor(e.clientHeight)]'), 15)
@@ -170,6 +177,7 @@ def main():
                     if cycle % 5 == 0:
                         allow_close(actor)
                         replacement = SoakActor(browser, user, args.origin)
+                        replacement.page.set_viewport_size({'width':args.width,'height':args.height})
                         attach(replacement)
                         replacement.login(); connected(replacement)
                         actor.page.locator('#status').filter(has_text='Viewer disconnected.').wait_for()

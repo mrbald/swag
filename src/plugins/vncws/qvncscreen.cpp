@@ -99,6 +99,8 @@ bool QVncScreen::initialize()
 
 bool QVncScreen::resizeScreen(const QSize &size)
 {
+    if (!QVncGeometryLimits::valid(size.width(), size.height()))
+        return false;
     if (size == mSize)
         return true;
 

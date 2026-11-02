@@ -17,6 +17,7 @@
 #include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
@@ -24,7 +25,9 @@
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QTableView>
+#include <QTextEdit>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QWheelEvent>
@@ -246,6 +249,8 @@ public:
         menu_ = menuBar()->addMenu(QStringLiteral("Actions"));
         menu_->setObjectName(QStringLiteral("probe_menu"));
         menu_->addAction(QStringLiteral("Open modal dialog"), this, &ProbeWindow::openDialog);
+        interactionsAction_ = menu_->addAction(QStringLiteral("Open interactions"), this,
+                                               &ProbeWindow::openInteractions);
         menu_->addAction(QStringLiteral("Copy draft to clipboard"), this, &ProbeWindow::copyText);
         menu_->addSeparator();
         menu_->addAction(QStringLiteral("Quit probe"), qApp, &QApplication::quit);
@@ -297,7 +302,15 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override {
-        if (event->type() == QEvent::KeyPress) {
+        if (event->type() == QEvent::ShortcutOverride && watched == QApplication::focusWidget()) {
+            const auto *key = static_cast<QKeyEvent *>(event);
+            ++rawKeyEvents_;
+            lastKeyCode_ = key->key();
+            lastKeyModifiers_ = int(key->modifiers());
+            lastKeyText_ = key->text();
+            lastKeyReceiver_ = watched->objectName();
+            record(QStringLiteral("raw_key:%1").arg(lastKeyCode_));
+        } else if (event->type() == QEvent::KeyPress && watched == QApplication::focusWidget()) {
             const auto *key = static_cast<QKeyEvent *>(event);
             ++keyEvents_;
             lastKey_ = QKeySequence(key->modifiers() | key->key()).toString(QKeySequence::PortableText);
@@ -350,6 +363,93 @@ private:
         record(QStringLiteral("dialog_open"));
     }
 
+    void openInteractions() {
+        if (interactionsDialog_) {
+            interactionsDialog_->raise();
+            interactionsDialog_->activateWindow();
+            return;
+        }
+        auto *dialog = new QDialog(this);
+        interactionsDialog_ = dialog;
+        dialog->setObjectName(QStringLiteral("interactions_dialog"));
+        dialog->setWindowTitle(QStringLiteral("Interactions"));
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setMinimumSize(520, 560);
+        dialog->resize(560, 600);
+        auto *layout = new QVBoxLayout(dialog);
+        layout->addWidget(new QLabel(QStringLiteral("Click the field, then press Return or keypad Enter."), dialog));
+        keyInput_ = new QLineEdit(dialog);
+        keyInput_->setObjectName(QStringLiteral("key_input"));
+        keyInput_->setPlaceholderText(QStringLiteral("Key shortcut target"));
+        layout->addWidget(keyInput_);
+        keyActionsLabel_ = new QLabel(dialog);
+        keyActionsLabel_->setObjectName(QStringLiteral("key_actions_label"));
+        layout->addWidget(keyActionsLabel_);
+        auto updateKeyLabel = [this] {
+            keyActionsLabel_->setText(QStringLiteral("Return actions: %1 | Keypad Enter actions: %2")
+                                          .arg(returnShortcutActions_).arg(enterShortcutActions_));
+        };
+        updateKeyLabel();
+        auto *returnShortcut = new QShortcut(QKeySequence(Qt::Key_Return), keyInput_);
+        returnShortcut->setContext(Qt::WidgetShortcut);
+        connect(returnShortcut, &QShortcut::activated, this, [this, updateKeyLabel] {
+            ++returnShortcutActions_;
+            updateKeyLabel();
+            record(QStringLiteral("return_shortcut"));
+        });
+        auto *enterShortcut = new QShortcut(QKeySequence(Qt::Key_Enter), keyInput_);
+        enterShortcut->setContext(Qt::WidgetShortcut);
+        auto *keypadEnterShortcut =
+            new QShortcut(QKeySequence(int(Qt::KeypadModifier) | Qt::Key_Enter), keyInput_);
+        keypadEnterShortcut->setContext(Qt::WidgetShortcut);
+        auto onEnter = [this, updateKeyLabel] {
+            ++enterShortcutActions_;
+            updateKeyLabel();
+            record(QStringLiteral("enter_shortcut"));
+        };
+        connect(enterShortcut, &QShortcut::activated, this, onEnter);
+        connect(keypadEnterShortcut, &QShortcut::activated, this, onEnter);
+
+        layout->addWidget(new QLabel(QStringLiteral("Multiline clipboard text:"), dialog));
+        multilineEditor_ = new QTextEdit(dialog);
+        multilineEditor_->setObjectName(QStringLiteral("multiline_editor"));
+        multilineEditor_->setPlaceholderText(QStringLiteral("Paste or type multiple lines here"));
+        multilineEditor_->setMinimumHeight(100);
+        layout->addWidget(multilineEditor_, 1);
+        connect(multilineEditor_, &QTextEdit::textChanged, this,
+                [this] { record(QStringLiteral("multiline_changed")); });
+
+        layout->addWidget(new QLabel(QStringLiteral("Drag an item to reorder:"), dialog));
+        reorderList_ = new QListWidget(dialog);
+        reorderList_->setObjectName(QStringLiteral("reorder_list"));
+        reorderList_->addItems({QStringLiteral("Alpha"), QStringLiteral("Beta"),
+                                QStringLiteral("Gamma"), QStringLiteral("Delta")});
+        reorderList_->setDragDropMode(QAbstractItemView::InternalMove);
+        reorderList_->setDefaultDropAction(Qt::MoveAction);
+        reorderList_->setDragEnabled(true);
+        reorderList_->setAcceptDrops(true);
+        reorderList_->setDropIndicatorShown(true);
+        reorderList_->setMinimumHeight(180);
+        layout->addWidget(reorderList_, 1);
+        connect(reorderList_->model(), &QAbstractItemModel::rowsMoved, this,
+                [this] { record(QStringLiteral("reorder_moved")); });
+
+        interactionsClose_ = new QPushButton(QStringLiteral("Close interactions"), dialog);
+        interactionsClose_->setObjectName(QStringLiteral("interactions_close_button"));
+        layout->addWidget(interactionsClose_);
+        connect(interactionsClose_, &QPushButton::clicked, dialog, &QDialog::close);
+        connect(dialog, &QDialog::finished, this, [this] {
+            interactionsOpen_ = false;
+            interactionsDialog_ = nullptr;
+            record(QStringLiteral("interactions_close"));
+        });
+        interactionsOpen_ = true;
+        dialog->show();
+        dialog->move(geometry().center() - QPoint(dialog->width() / 2, dialog->height() / 2));
+        keyInput_->setFocus();
+        record(QStringLiteral("interactions_open"));
+    }
+
     static QJsonArray bounds(const QWidget *widget) {
         const auto position = widget->mapToGlobal(QPoint(0, 0));
         return {position.x(), position.y(), widget->width(), widget->height()};
@@ -391,8 +491,22 @@ private:
             geometry.insert(QStringLiteral("dialog"), bounds(dialog_));
             geometry.insert(QStringLiteral("dialog_editor"), bounds(dialogEditor_));
         }
-        if (menuOpen_)
+        if (interactionsOpen_ && interactionsDialog_) {
+            geometry.insert(QStringLiteral("interactions_dialog"), bounds(interactionsDialog_));
+            geometry.insert(QStringLiteral("key_input"), bounds(keyInput_));
+            geometry.insert(QStringLiteral("multiline_editor"), bounds(multilineEditor_));
+            geometry.insert(QStringLiteral("reorder_list_viewport"), bounds(reorderList_->viewport()));
+            geometry.insert(QStringLiteral("interactions_close_button"), bounds(interactionsClose_));
+            for (int row = 0; row < reorderList_->count(); ++row)
+                geometry.insert(QStringLiteral("reorder_item_%1").arg(row),
+                                localBounds(reorderList_->viewport(),
+                                            reorderList_->visualItemRect(reorderList_->item(row))));
+        }
+        if (menuOpen_) {
             geometry.insert(QStringLiteral("menu_popup"), bounds(menu_));
+            geometry.insert(QStringLiteral("interactions_menu_action"),
+                            localBounds(menu_, menu_->actionGeometry(interactionsAction_)));
+        }
         const bool comboPopupOpen = combo_->view()->isVisible();
         if (comboPopupOpen)
             geometry.insert(QStringLiteral("combo_popup"), bounds(combo_->view()));
@@ -402,6 +516,11 @@ private:
         if (grid_->currentIndex().isValid())
             geometry.insert(QStringLiteral("grid_current_cell"),
                             localBounds(grid_->viewport(), grid_->visualRect(grid_->currentIndex())));
+        QJsonArray reorderOrder;
+        if (interactionsOpen_ && reorderList_) {
+            for (int row = 0; row < reorderList_->count(); ++row)
+                reorderOrder.append(reorderList_->item(row)->text());
+        }
         QJsonObject state{
             {QStringLiteral("user"), user_},
             {QStringLiteral("generation"), generation_},
@@ -416,6 +535,11 @@ private:
             {QStringLiteral("combo_value"), combo_->currentText()},
             {QStringLiteral("combo_popup_open"), comboPopupOpen},
             {QStringLiteral("dialog_open"), dialogOpen_},
+            {QStringLiteral("interactions_open"), interactionsOpen_},
+            {QStringLiteral("return_shortcut_actions"), returnShortcutActions_},
+            {QStringLiteral("enter_shortcut_actions"), enterShortcutActions_},
+            {QStringLiteral("multiline_text"), interactionsOpen_ ? multilineEditor_->toPlainText() : QString()},
+            {QStringLiteral("reorder_order"), reorderOrder},
             {QStringLiteral("dialog_text"), dialogEditor_ ? dialogEditor_->text() : QString()},
             {QStringLiteral("active_modal"), QApplication::activeModalWidget() != nullptr},
             {QStringLiteral("focus_widget"), QApplication::focusWidget()
@@ -431,6 +555,11 @@ private:
             {QStringLiteral("current_value"), model_->data(grid_->currentIndex(), Qt::EditRole).toString()},
             {QStringLiteral("grid_editing"), grid_->isEditing()},
             {QStringLiteral("key_events"), keyEvents_},
+            {QStringLiteral("raw_key_events"), rawKeyEvents_},
+            {QStringLiteral("last_key_code"), lastKeyCode_},
+            {QStringLiteral("last_key_modifiers"), lastKeyModifiers_},
+            {QStringLiteral("last_key_text"), lastKeyText_},
+            {QStringLiteral("last_key_receiver"), lastKeyReceiver_},
             {QStringLiteral("wheel_events"), wheelEvents_},
             {QStringLiteral("last_wheel_modifiers"), lastWheelModifiers_},
             {QStringLiteral("last_key"), lastKey_}
@@ -464,19 +593,34 @@ private:
     QPushButton *quitButton_{};
     QLabel *marker_{};
     QMenu *menu_{};
+    QAction *interactionsAction_{};
     QPointer<QDialog> dialog_;
     QPointer<QPushButton> dialogClose_;
     QPointer<QLineEdit> dialogEditor_;
+    QPointer<QDialog> interactionsDialog_;
+    QPointer<QLineEdit> keyInput_;
+    QPointer<QLabel> keyActionsLabel_;
+    QPointer<QTextEdit> multilineEditor_;
+    QPointer<QListWidget> reorderList_;
+    QPointer<QPushButton> interactionsClose_;
     bool ready_{};
     bool dialogOpen_{};
+    bool interactionsOpen_{};
     bool menuOpen_{};
     bool stateErrorReported_{};
     int sequence_{};
     int keyEvents_{};
+    int rawKeyEvents_{};
+    int returnShortcutActions_{};
+    int enterShortcutActions_{};
+    int lastKeyCode_{};
+    int lastKeyModifiers_{};
     int wheelEvents_{};
     int lastWheelModifiers_{};
     QString lastEvent_;
     QString lastKey_;
+    QString lastKeyText_;
+    QString lastKeyReceiver_;
 };
 
 } // namespace

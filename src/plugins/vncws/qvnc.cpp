@@ -237,7 +237,7 @@ static const struct {
     { 0xffb8, Qt::Key_8         },
     { 0xffb9, Qt::Key_9         },
 
-    { 0xff8d, Qt::Key_Return    },
+    { 0xff8d, Qt::Key_Enter     },
     { 0xffaa, Qt::Key_Asterisk  },
     { 0xffab, Qt::Key_Plus      },
     { 0xffad, Qt::Key_Minus     },
@@ -484,7 +484,7 @@ QRfbRawEncoder::~QRfbRawEncoder()
 bool QRfbRawEncoder::writeZlib(const QImage &screenImage, const QRegion &region,
                               bool includeCursor)
 {
-    constexpr int MaxStagedBytes = 12 * 1024 * 1024;
+    constexpr int MaxStagedBytes = 24 * 1024 * 1024;
     try {
         if (!zlibInitialized) {
             if (deflateInit(&zlibStream, Z_BEST_SPEED) != Z_OK) {
@@ -718,6 +718,19 @@ bool QVncClientCursor::writeRect(QVncClient *client, QIODevice *socket) const
         return false;
     const qint64 width = cursor.width();
     const qint64 height = cursor.height();
+    const bool empty = cursor.isNull();
+    const QImage img = empty ? QImage() : cursor.convertToFormat(client->server()->screen()->format());
+    if (!empty && (img.isNull() || img.size() != cursor.size()))
+        return false;
+    const int maskWidth = (int(width) + 7) / 8;
+    const bool hasAlpha = !empty && cursor.hasAlphaChannel();
+    const QImage bitmap = hasAlpha
+            ? cursor.createAlphaMask().convertToFormat(QImage::Format_Mono) : QImage();
+    if (hasAlpha && (bitmap.isNull() || bitmap.depth() != 1 || bitmap.size() != img.size()))
+        return false;
+    // Qt can strip the alpha channel from an entirely opaque QPixmap.
+    const QByteArray opaqueMask = !empty && !hasAlpha
+            ? QByteArray(maskWidth, char(0xff)) : QByteArray();
     char rect[12];
     qToBigEndian(quint16(hotspot.x()), reinterpret_cast<uchar *>(rect));
     qToBigEndian(quint16(hotspot.y()), reinterpret_cast<uchar *>(rect + 2));
@@ -727,12 +740,10 @@ bool QVncClientCursor::writeRect(QVncClient *client, QIODevice *socket) const
     if (socket->write(rect, sizeof(rect)) != sizeof(rect))
         return false;
 
-    if (cursor.isNull())
+    if (empty)
         return true;
 
     // write pixels
-    Q_ASSERT(cursor.hasAlphaChannel());
-    const QImage img = cursor.convertToFormat(client->server()->screen()->format());
     const int n = client->clientBytesPerPixel() * img.width();
     char *buffer = new char[n];
     for (int i = 0; i < img.height(); ++i) {
@@ -745,13 +756,16 @@ bool QVncClientCursor::writeRect(QVncClient *client, QIODevice *socket) const
     delete[] buffer;
 
     // write mask
-    const QImage bitmap = cursor.createAlphaMask().convertToFormat(QImage::Format_Mono);
-    Q_ASSERT(bitmap.depth() == 1);
-    Q_ASSERT(bitmap.size() == img.size());
-    const int maskWidth = (bitmap.width() + 7) / 8;
-    for (int i = 0; i < bitmap.height(); ++i) {
-        if (socket->write((const char*)bitmap.scanLine(i), maskWidth) != maskWidth)
-            return false;
+    if (!hasAlpha) {
+        for (int i = 0; i < img.height(); ++i) {
+            if (socket->write(opaqueMask.constData(), maskWidth) != maskWidth)
+                return false;
+        }
+    } else {
+        for (int i = 0; i < bitmap.height(); ++i) {
+            if (socket->write((const char*)bitmap.scanLine(i), maskWidth) != maskWidth)
+                return false;
+        }
     }
     return true;
 }

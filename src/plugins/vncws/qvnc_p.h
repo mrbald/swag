@@ -61,6 +61,19 @@ class QVncServer;
 class QVncClientCursor;
 class QVncClient;
 
+namespace QVncGeometryLimits {
+constexpr int MinDimension = 64;
+constexpr int MaxDimension = 4096;
+constexpr qint64 MaxPixels = 4953600; // 3440 x 1440
+
+inline bool valid(int width, int height)
+{
+    return width >= MinDimension && width <= MaxDimension &&
+           height >= MinDimension && height <= MaxDimension &&
+           qint64(width) * height <= MaxPixels;
+}
+}
+
 // This fits with the VNC hextile messages
 #define MAP_TILE_SIZE 16
 

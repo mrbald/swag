@@ -129,9 +129,8 @@ QVncIntegration::QVncIntegration(const QStringList &paramList)
             const int width = match.captured(1).toInt(&widthOk);
             const int height = match.captured(2).toInt(&heightOk);
             if (!match.hasMatch() || !widthOk || !heightOk ||
-                width < 64 || width > 2048 || height < 64 || height > 2048 ||
-                qint64(width) * height > 2073600)
-                qFatal("vncws: size must be 64..2048 in each dimension and at most 2073600 pixels");
+                !QVncGeometryLimits::valid(width, height))
+                qFatal("vncws: size must be 64..4096 in each dimension and at most 4953600 pixels");
             size = QSize(width, height);
         } else if (key == QLatin1String("depth")) {
             if (value != QLatin1String("32"))

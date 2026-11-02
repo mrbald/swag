@@ -39,7 +39,8 @@ with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
         assert 'vncws:' in result.stdout, result.stdout
         return dict(exit_code=result.returncode, diagnostic=result.stdout.strip())
 
-    for options in ['size=0x800', 'size=4096x4096', 'size=2048x2048',
+    for options in ['size=0x800', 'size=4096x4096', 'size=4097x800',
+                    'size=3440x1441', 'size=4096x1210',
                     'size=1280x800junk', 'size=800x600:size=800x600',
                     'depth=16', 'port=0', 'port=65536', 'port=5900junk',
                     'addr=localhost', 'addr=999.0.0.1', 'unknown=1',
@@ -51,14 +52,17 @@ with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
         occupied.listen()
         check('occupied_port_fails', lambda: fails(f'port={occupied.getsockname()[1]}'))
 
-    def default_loopback():
+    def default_loopback(size=None):
         with socket.socket() as reservation:
             reservation.bind(('127.0.0.1', 0))
             port = reservation.getsockname()[1]
         state.unlink(missing_ok=True)
         with (Path(directory)/'qt.log').open('w+') as log:
+            platform = f'vncws:port={port}'
+            if size:
+                platform += f':size={size}'
             process = subprocess.Popen(['/opt/swag/bin/swag-probe'],
-                                       env=environment(f'vncws:port={port}', state),
+                                       env=environment(platform, state),
                                        stdout=log, stderr=subprocess.STDOUT)
             try:
                 deadline = time.monotonic()+5
@@ -70,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
                                  if line.split()[3] == '0A' and int(line.split()[1].split(':')[1], 16) == port]
                     if listeners:
                         assert listeners == [f'0100007F:{port:04X}'], listeners
-                        return dict(address='127.0.0.1', port=port)
+                        return dict(address='127.0.0.1', port=port, size=size or 'default')
                     time.sleep(.05)
                 raise TimeoutError('listener readiness')
             finally:
@@ -81,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
                     process.kill()
                     process.wait()
     check('default_listener_is_loopback', default_loopback)
+    check('ultrawide_startup_listener', lambda: default_loopback('3440x1440'))
 
     read_fd, write_fd = os.pipe()
     try:
