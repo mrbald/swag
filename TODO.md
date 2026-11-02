@@ -36,3 +36,6 @@ Root maintains this checklist. No separate task system.
 - [x] Review and integrate both worktrees; pass standalone/combined builds and real noVNC functional gates.
 - [x] Compare final network profiles and complete a two-user 30-minute soak with resource/cleanup evidence.
 - [x] Commit verified checkpoints, record limits and restore the demo.
+- [x] Complete bounded plugin defect hunt: fix reproduced Super-key and multi-button transition failures; record evidence and client-dependent findings.
+- [ ] Session failure-path review blocked by automated model cybersecurity filter; no review result or retry.
+- [x] Add and verify a short top-level README guide for transplanting the plugin into the client application.

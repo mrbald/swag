@@ -132,6 +132,13 @@ CPU/RSS, available queue evidence, failures and cleanup results. This bounded
 local exercise establishes no production SLO or capacity claim. Exact client Qt,
 application and Windows/RDP qualification remain external gates.
 
+Before client integration, perform one bounded local defect hunt across transport
+feature interactions and session failure paths. Fix only reproduced defects with
+focused regressions; classify remaining candidates as ruled out or requiring
+client evidence. Keep functional checks with each fix and relevant nonfunctional
+checks last. Add a short top-level README source-transplant/build/install/run guide,
+preserving the separate application and infrastructure packaging responsibilities.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

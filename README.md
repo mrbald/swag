@@ -40,6 +40,7 @@ your application can keep C++23/GCC Toolset 15.
    at startup. Build and install your application normally; the plugin's install
    rule produces `<prefix>/plugins/platforms/libqvncws.so`. Include that file in
    the **application RPM**, alongside the application and its runtime dependencies.
+   If your build selects only the executable target, also build target `qvncws`.
 3. For a private, single-process smoke test, launch your existing executable:
 
    ```sh

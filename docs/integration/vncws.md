@@ -425,6 +425,35 @@ The accepted tests use dedicated ports, refresh the observed session, preserve
 the normalization boundary with fewer lines, and passively observe Provide
 before sending paste keys. None of those rejected runs count as passing evidence.
 
+## Follow-up input fixes and source transplant
+
+A bounded local review reproduced two input defects: noVNC's `Super_L/R`
+keysyms were dropped instead of becoming Qt Meta, and one RFB pointer packet
+changing several buttons could leave Qt's held-button state incorrect. Both are
+fixed. Pointer changes now emit individual releases before individual presses;
+intermediate event order was reviewed in source, while final held state and
+disconnect cleanup were observed at runtime.
+
+The baseline failed seven focused assertions; the fixed plugin passed all 17
+input checks, 26 protocol checks, 10 original MDI checks and eight resize checks.
+Installed Chrome/noVNC passed 16 browser checks on each of Qt WebSocket and
+TigerVNC. The browser shortcut check respects pinned noVNC's macOS mapping
+(left Command to Alt, right Command to Super) and verifies an ordinary key after
+release. This does not qualify Windows/RDP interception or IME/AltGr layouts.
+
+The top-level [transplant quickstart](../../README.md#transplant-the-qt-websocket-plugin-into-your-application)
+was exercised by copying the complete plugin directory into a minimal C++23 Qt
+Widgets project, building the C++17 plugin with it, installing it, and observing
+a successful WebSocket upgrade and RFB greeting. This native EL8/Qt 5.15.3 fixture
+is not the actual client application. The application executable and noVNC core
+hashes remain unchanged in the regression images.
+
+Evidence and final nonfunctional results are under `artifacts/qt-ws-hunt/`, indexed
+by `verified-summary.json` and `REVIEW.md`. The earlier 30-minute soak belongs to
+the preceding checkpoint and was not repeated for these input-only changes.
+The delegated session failure-path audit was blocked by an automated model
+cybersecurity filter before returning a review; that coverage remains open.
+
 ## Client qualification
 
 The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
