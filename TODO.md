@@ -31,3 +31,8 @@ Root maintains this checklist. No separate task system.
 - [x] Fix stale input modifiers and horizontal wheel direction; verify wire ordering and real noVNC input.
 - [x] Keep each Qt listener reserved through manager-controlled generation teardown; verify endpoint-reuse races and failure cleanup.
 - [x] Remove the private Qt heartbeat timeout; verify recovery after a GUI stall, run focused regression gates and restore the MDI demo.
+- [x] Batch pending cursor and pixels into one response; independently verify framing, pixels and deferred updates.
+- [x] Add serialization-aware browser clipboard preflight with accessible rejection and focused boundary tests.
+- [x] Review and integrate both worktrees; pass standalone/combined builds and real noVNC functional gates.
+- [x] Compare final network profiles and complete a two-user 30-minute soak with resource/cleanup evidence.
+- [x] Commit verified checkpoints, record limits and restore the demo.

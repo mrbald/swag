@@ -114,6 +114,24 @@ Remove avoidable transport/scheduling delay where demonstrated, retaining lossle
 compression, bounded queues and WAN savings. Compare the same real-browser workload
 and keep the application executable unchanged; client qualification remains separate.
 
+## Approved transport polish and qualification
+
+Batch a pending client cursor and dirty pixels into one framebuffer response,
+preserving Raw/zlib negotiation, bounded pacing and backpressure. Add browser
+clipboard preflight to the workspace and probe, with a serialization-aware size
+bound and accessible local errors that preserve text, focus and the connection.
+Keep the plugin's existing clipboard limits and rejection policy; outbound
+oversized-copy feedback is separate future scope.
+
+Implement these independent changes in separate worktrees with focused tests.
+Root reviews and integrates them, then runs the combined functional browser gates.
+Final nonfunctional qualification compares the accepted baseline and candidate
+under the existing three network profiles and runs a two-user, 30-minute soak
+covering edits, clipboard, resize, reconnect and takeover. Retain timing, bytes,
+CPU/RSS, available queue evidence, failures and cleanup results. This bounded
+local exercise establishes no production SLO or capacity claim. Exact client Qt,
+application and Windows/RDP qualification remain external gates.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

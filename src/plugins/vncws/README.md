@@ -37,6 +37,10 @@ expose this listener only within a trusted access boundary. The Extended
 Clipboard pseudo-encoding transfers UTF-8 text through a bounded zlib payload
 when the viewer supports it. Unnegotiated viewers use RFB's Latin-1 text path.
 Clipboard text and compressed messages are limited to 1 MiB.
+The supplied SWAG browser pages validate normalized UTF-8 and the pinned noVNC
+compressed payload before sending. Rejected text remains editable with a visible
+error. The plugin still disconnects invalid/oversized inbound protocol messages;
+oversized outbound Qt clipboard text is still omitted.
 
 The accepted client pixel formats are 32 bits per pixel, depth 24 or 32,
 little-endian true color with 8-bit red/green/blue channels and shifts either
@@ -50,8 +54,10 @@ limits as startup. Unsupported dimensions or screen layouts receive an RFB
 status reply without disconnecting. The Qt process and its windows remain in
 place. The viewer may prefer standard zlib encoding (`6`) over Raw (`0`);
 one zlib stream is kept for the connection across resize and encoding
-renegotiation. Raw remains the fallback. Pixel and cursor updates are spaced
-by at least 16 ms; the first update after idle runs on the next event-loop
+renegotiation. Raw remains the fallback. Pending pixels and cursor rectangles
+share one framebuffer response when both are ready.
+Cursor rectangles are bounded to 1 MiB including header, pixels and mask.
+Framebuffer updates are spaced by at least 16 ms; the first update after idle runs on the next event-loop
 turn. Updates are deferred while the WebSocket output queue is congested;
 clipboard and size replies retain their stream order. On Linux, the listener
 enables TCP_NODELAY for accepted connections to avoid delaying small frames.

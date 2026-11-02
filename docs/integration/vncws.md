@@ -356,10 +356,74 @@ encoding while still rejecting swapped channels; qt-ws retains exact RGB checks.
 A container-runtime mount failure occurred before one browser fixture started.
 None of these initial runs count as passing evidence.
 
-Cursor/pixel update batching and friendlier oversized-clipboard rejection remain
-optional improvements. The previously measured WAN tradeoff is unchanged as
-historical evidence; these fixes did not include a new network benchmark or
-expand the client qualification claims.
+These review fixes did not include a new network benchmark. Their earlier WAN
+measurements remain historical evidence.
+
+## Cursor batching and browser clipboard preflight
+
+A requested update now includes both pending cursor and dirty pixel rectangles
+in one framebuffer response. Raw and zlib retain their negotiation and stream
+semantics; failed or partial writes close the connection. The existing pacing
+and backpressure gates remain. Cursor rectangles have a 1 MiB wire bound and
+are included in the compressed response's 12 MiB staging bound.
+
+The supplied workspace and probe pages reject oversized/unsupported clipboard
+text locally with an accessible error, retaining the entered text and connection.
+Preflight uses the pinned noVNC UTF-8 encoder and fresh Deflator: normalized
+UTF-8 including terminal NUL must fit 1 MiB, and the compressed stream plus its
+four flag bytes must fit 1 MiB. Embedded NUL and malformed UTF-16 are rejected.
+The same conservative policy applies before legacy fallback. Plugin-side limits
+and disconnect policy remain unchanged; oversized outbound-copy feedback remains
+future work. An independently embedded viewer must supply its own validation.
+
+Standalone and combined application/plugin builds passed on aarch64 EL8,
+Qt 5.15.3 and GCC 15.2.1. The original application/probe executables and noVNC
+core hashes match the baseline. Functional evidence includes 151 wire/browser
+suite checks, four Node boundary cases, ten checks using the pinned noVNC
+compressor and two synthetic blank/oversized cursor cases. The cursor wire
+test fails on the baseline and passes on the candidate with byte-exact pixels.
+The standalone JavaScript checks used Node 26.8.2; run them with
+`node --test tests/test_clipboard_preflight.mjs` (Node with ES-module syntax
+detection is required). Browser checks use installed Chrome, not bundled engines.
+
+The final paired network run adds 12 cursor-transition samples to the existing
+12 row-selection samples per profile. Values below are baseline -> candidate
+median/p95 milliseconds; this is one ordered comparison with small samples,
+not a stable-tail or production latency claim.
+
+| Profile | Row selection | Cursor transition and row paint |
+| --- | --- | --- |
+| Local | 33.48/53.36 -> 32.79/37.29 | 52.51/54.42 -> 52.59/53.03 |
+| +50 ms RTT, 20/5 Mbps | 131.99/165.04 -> 131.69/186.11 | 166.42/185.87 -> 186.09/190.72 |
+| +100 ms RTT, 5/1 Mbps | 240.88/341.41 -> 250.34/366.56 | 425.82/451.03 -> 335.50/364.66 |
+
+All six profile runs passed with complete traffic accounting. The slow profile's
+cursor-transition improvement comes with a worse row-selection result; the
+50 ms cursor result also regressed. This establishes no universal speedup.
+Downstream traffic was 1.71-1.74 MB baseline and 1.71-1.72 MB candidate for the
+expanded workload. Candidate Qt CPU was 0.25-0.39 seconds and RSS 67,984-68,152 KiB.
+Evidence: `artifacts/qt-ws-polish/verified-summary.json`, `comparison.json`,
+`network-baseline/`, and `network-candidate/`.
+
+The final two-user soak passed 1,800.35 seconds and 177 cycles: 354 clipboard
+round trips, 118 reconnects and 70 viewer takeovers. Both original Qt processes
+and unsaved forms survived the workload. No unexpected viewer closures or
+browser errors were recorded. Final teardown removed both GUI processes and
+released their reserved listener ports. Sampled RSS ended at 68,372/68,192 KiB
+for Alice/Bob; kernel peak RSS was 83,268/79,216 KiB. Sampled descriptor counts
+ranged from 12 to 15, with both ending at 12; CPU increased by 22.86/22.46 seconds
+over the samples. This is alternating real input to two live local users,
+not simultaneous-throughput or production capacity qualification. Resource
+sampling is periodic, and queue evidence comes from the independent paused-reader
+check rather than a continuous queue high-water measurement. Details:
+`artifacts/qt-ws-polish/soak/results.json` and `verified-summary.json`.
+
+Rejected harness runs remain separate: an initial probe port collision, stale
+session observation after Start, excessive textarea line layout in a boundary
+test, and a fullscreen test that pasted before ExtendedClipboard Provide.
+The accepted tests use dedicated ports, refresh the observed session, preserve
+the normalization boundary with fewer lines, and passively observe Provide
+before sending paste keys. None of those rejected runs count as passing evidence.
 
 ## Client qualification
 

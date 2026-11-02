@@ -43,6 +43,8 @@ def main():
     parser.add_argument('--output',type=Path,default=ROOT/'artifacts/qt-ws-network')
     parser.add_argument('--samples',type=int,default=12)
     parser.add_argument('--profile',choices=[p['name'] for p in PROFILES])
+    parser.add_argument('--cursor-transitions',action='store_true',
+                        help='also measure row paints after moving from a text cursor')
     args=parser.parse_args()
     if not 3 <= args.samples <= 100:
         parser.error('--samples must be between 3 and 100')
@@ -185,6 +187,28 @@ print(json.dumps({'cpu_seconds':(int(s[11])+int(s[12]))/os.sysconf('SC_CLK_TCK')
                             visible=(time.perf_counter()-begin)*1000
                             actor.wait(lambda s:s.get('selected_id')==initial['items'][target]['id'],45)
                             samples.append(round(visible,2))
+                        if args.cursor_transitions:
+                            cursor_samples=[]
+                            arrow_cursor=actor.page.locator('#screen canvas').evaluate('e => e.style.cursor')
+                            assert arrow_cursor.startswith('url('), 'native noVNC cursor expected'
+                            for index in range(args.samples):
+                                # Real hover over the editor establishes an I-beam;
+                                # the following real click changes cursor and row paint.
+                                actor.page.mouse.move(*actor.canvas_point(actor.state()['geometry']['draft']))
+                                actor.page.wait_for_function("old => { const s=document.querySelector('#screen canvas').style.cursor; return s.startsWith('url(') && s!==old; }", arg=arrow_cursor, timeout=45000)
+                                target=1 if actor.state()['selected_id']==initial['items'][0]['id'] else 0
+                                point=points[target]
+                                assert actor.page.evaluate(PIXEL,point)!=color
+                                begin=time.perf_counter()
+                                actor.page.mouse.click(*actor.canvas_point(actor.state()['geometry'][f'grid_row_{target}']))
+                                actor.page.wait_for_function(WAIT_PIXEL,arg={**point,'color':color},
+                                                             timeout=45000,polling=20)
+                                cursor_samples.append(round((time.perf_counter()-begin)*1000,2))
+                                actor.page.wait_for_function("old => document.querySelector('#screen canvas').style.cursor===old", arg=arrow_cursor, timeout=45000)
+                                actor.wait(lambda s:s.get('selected_id')==initial['items'][target]['id'],45)
+                            result.update(cursor_transition_to_row_paint_ms=cursor_samples,
+                                cursor_transition_median_ms=round(statistics.median(cursor_samples),2),
+                                cursor_transition_p95_ms=sorted(cursor_samples)[math.ceil(len(cursor_samples)*.95)-1])
                         after=resources(actor.session['pid'])
                         result.update(command_to_visible_ms=samples,
                             median_ms=round(statistics.median(samples),2),

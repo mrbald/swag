@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import struct
+import time
 
 from playwright.sync_api import sync_playwright
 
@@ -16,14 +18,28 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", default="http://localhost:6081")
+    parser.add_argument("--output", type=Path, default=ROOT / "artifacts/presentation-check")
     args = parser.parse_args()
-    output = ROOT / "artifacts/presentation-check"
+    output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     workspace.OUTPUT = output
     checks, current = [], "compact_chrome"
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome", headless=True)
         actor = workspace.Actor(browser, "alice", args.origin)
+        clipboard_provides = []
+
+        def observe_socket(socket):
+            def sent(payload):
+                # These short test strings fit one noVNC send buffer. Observe
+                # actual Provide (or legacy CutText), not the preceding Notify.
+                if not isinstance(payload, bytes) or len(payload) < 8 or payload[:4] != b'\x06\0\0\0':
+                    return
+                length = struct.unpack('>i', payload[4:8])[0]
+                if length >= 0 or (len(payload) >= 12 and payload[8:12] == b'\x10\0\0\x01'):
+                    clipboard_provides.append(True)
+            socket.on('framesent', sent)
+        actor.page.on('websocket', observe_socket)
         try:
             actor.login(); actor.api("DELETE"); actor.api("POST")
             actor.page.reload(wait_until="domcontentloaded"); actor.connected()
@@ -79,7 +95,12 @@ def main():
             actor.open_clipboard()
             actor.page.locator("#clipboard").fill("Clipboard local input")
             assert actor.state()["draft"] == "Qt note remains while typing in browser"
+            previous_provides = len(clipboard_provides)
             actor.page.locator("#paste").click()
+            deadline = time.monotonic() + 10
+            while len(clipboard_provides) == previous_provides and time.monotonic() < deadline:
+                actor.page.wait_for_timeout(20)
+            assert len(clipboard_provides) > previous_provides, 'clipboard Provide not sent'
             actor.page.keyboard.press("Control+a"); actor.page.keyboard.press("Control+v")
             actor.wait(lambda s: s.get("draft") == "Clipboard local input")
             actor.edit("draft", "Qt clipboard outbound")
@@ -142,6 +163,7 @@ def main():
             bar = actor.page.locator("#bar").bounding_box()
             assert bar["y"] == 0
             actor.page.locator("#start").click()
+            workspace.wait_for(lambda: actor.api()["body"]["state"] == "running")
             actor.connected()
             assert actor.api()["body"]["generation"] != identity[1]
             passed(ended_workspace_controls_visible=True, explicit_restart_in_fullscreen=True)
