@@ -37,5 +37,11 @@ Root maintains this checklist. No separate task system.
 - [x] Compare final network profiles and complete a two-user 30-minute soak with resource/cleanup evidence.
 - [x] Commit verified checkpoints, record limits and restore the demo.
 - [x] Complete bounded plugin defect hunt: fix reproduced Super-key and multi-button transition failures; record evidence and client-dependent findings.
-- [ ] Session failure-path review and user-authorized retry blocked by automated model cybersecurity filter; no review result.
+- [ ] Parked by user: session failure-path review and retry blocked by automated model cybersecurity filter; no review result.
 - [x] Add and verify a short top-level README guide for transplanting the plugin into the client application.
+- [x] Preserve multiline workspace clipboard text and prove a two-row TSV roundtrip through the actual viewer.
+- [x] Distinguish keypad Enter/Return and verify their Qt actions through noVNC.
+- [x] Support 3440x1440 with coherent bounded geometry/transport limits; verify pixels, resize, cursor, rejection and recovery.
+- [x] Qualify actual Qt item drag-and-drop through noVNC against the Tiger reference; fix only reproduced failures.
+- [x] Fix opaque custom-cursor mask truncation exposed by the large-frame acceptance test; verify RGB and alpha cursors.
+- [x] Integrate, pass three ultrawide network profiles and a five-minute two-user soak, restore the demo, and record the next everyday-behavior review candidates.

@@ -39,15 +39,16 @@ not a viewer access control. Existing open-connection revocation is an explicit
 deployment policy.
 
 Current limits: Qt 5.15/Linux raster widgets; one viewer with takeover; one
-resizable screen (64..2048 per dimension, at most 2,073,600 pixels); 32-bit framebuffer;
+resizable screen (64..4096 per dimension, at most 4,953,600 pixels, including
+native 3440x1440); 32-bit framebuffer;
 RFB 3.3 with little-endian RGB888 in either tested channel order; negotiated
 lossless zlib framebuffer encoding with Raw fallback;
 negotiated UTF-8 clipboard with Latin-1 fallback. The RFB handshake deadline is 10 seconds. Input messages/queue
-are capped at 1 MiB, output queue at 16 MiB, encoding hints and distinct held
+are capped at 1 MiB, output queue at 32 MiB, encoding hints and distinct held
 keys at 256. Successive pixel updates are spaced by 16 ms; after idle the next
 update is queued immediately. Updates pause above 1 MiB of local
 WebSocket output backlog, resuming below 512 KiB. Compressed updates are staged
-under a 12 MiB cap before sending. The 16 MiB hard output cap still disconnects
+under a 24 MiB cap before sending. The 32 MiB hard output cap still disconnects
 an overflowing viewer; this is bounded local-transport pacing, not adaptive WAN
 congestion control.
 
@@ -365,7 +366,8 @@ A requested update now includes both pending cursor and dirty pixel rectangles
 in one framebuffer response. Raw and zlib retain their negotiation and stream
 semantics; failed or partial writes close the connection. The existing pacing
 and backpressure gates remain. Cursor rectangles have a 1 MiB wire bound and
-are included in the compressed response's 12 MiB staging bound.
+are included in the compressed response's staging bound (12 MiB at that
+checkpoint; now 24 MiB for the larger desktop envelope).
 
 The supplied workspace and probe pages reject oversized/unsupported clipboard
 text locally with an accessible error, retaining the entered text and connection.
@@ -453,6 +455,33 @@ by `verified-summary.json` and `REVIEW.md`. The earlier 30-minute soak belongs t
 the preceding checkpoint and was not repeated for these input-only changes.
 The delegated session failure-path audit was blocked by an automated model
 cybersecurity filter before returning a review; that coverage remains open.
+
+## Everyday interactions and ultrawide displays
+
+The desktop envelope now includes native 3440x1440, with an independent 4096
+per-dimension limit and a 4,953,600-pixel area limit. Browser fullscreen uses the
+full framebuffer; ordinary browser mode leaves space for the toolbar. Above the
+envelope, the supplied viewer retains and scales the existing desktop and shows
+a notice. Input, unsaved edits and return to a supported size remain functional.
+
+The workspace clipboard panel now uses a textarea. A two-row TSV value, including
+its trailing newline, passed both directions through the authenticated shell and
+a Qt multiline widget. The former single-line control altered row boundaries.
+Keypad Enter now arrives as Qt Enter rather than Return, with keypad metadata
+attached to the individual event. Distinct Qt shortcuts and actual QListWidget
+item reordering passed through noVNC on both renderers with the same probe binary.
+
+The dense-frame acceptance test exposed and fixed a further cursor bug: an opaque
+QPixmap could lose its alpha channel, causing the plugin to omit the required RFB
+mask. RGB cursors now receive a complete opaque mask; alpha masks are validated
+before emitting the rectangle. A 3440x1440 frame with a 495x499 opaque cursor passed
+Raw/zlib pixel comparison and paused-reader recovery, with actual queue defer and
+resume evidence. Existing alpha-cursor checks remain part of the regression gate.
+
+Full evidence, relevant final nonfunctional results, rejected harness runs and
+the next bounded review candidates are indexed under `artifacts/qt-ws-batch1/`.
+These are native EL8 and installed macOS Chrome observations, not qualification
+of the client's Windows/RDP path. Clean runtime packaging remains a separate task.
 
 ## Client qualification
 

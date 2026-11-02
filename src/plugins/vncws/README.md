@@ -25,8 +25,8 @@ explicitly controlled published port, add `addr=0.0.0.0` to the platform
 string. Default bind address is `127.0.0.1`. One viewer is supported; a new
 viewer takes over the connection.
 
-Accepted parameters are `size=WxH` (each dimension 64–2048, area at most
-2,073,600 pixels), `depth=32`, `port=1..65535`, and `addr=` followed by a
+Accepted parameters are `size=WxH` (each dimension 64–4096, area at most
+4,953,600 pixels, including native 3440×1440), `depth=32`, `port=1..65535`, and `addr=` followed by a
 dotted-decimal IPv4 address. Supervised Linux launches may instead use `fd=N`
 to adopt an inherited, already listening TCP socket bound to `127.0.0.1`;
 `fd` cannot be combined with `addr` or `port`. The plugin restores
@@ -57,10 +57,16 @@ one zlib stream is kept for the connection across resize and encoding
 renegotiation. Raw remains the fallback. Pending pixels and cursor rectangles
 share one framebuffer response when both are ready.
 Cursor rectangles are bounded to 1 MiB including header, pixels and mask.
-Framebuffer updates are spaced by at least 16 ms; the first update after idle runs on the next event-loop
+Pixel/cursor updates are spaced by at least 16 ms; the first update after idle runs on the next event-loop
 turn. Updates are deferred while the WebSocket output queue is congested;
 clipboard and size replies retain their stream order. On Linux, the listener
 enables TCP_NODELAY for accepted connections to avoid delaying small frames.
+Compressed responses are staged under a 24 MiB cap; the WebSocket output queue
+is capped at 32 MiB. These bounds include the larger framebuffer while preserving
+the 1 MiB defer / 512 KiB resume thresholds. The supplied workspace viewer scales
+the existing desktop and displays a notice above the supported geometry limit.
+Keypad Enter is delivered as Qt Enter with event-local keypad metadata, distinct
+from ordinary Return. The workspace clipboard panel preserves multiline text.
 
 The files `main.cpp`, `qvnc.cpp`, `qvnc_p.h`, `qvncclient.cpp`,
 `qvncclient.h`, `qvncintegration.cpp`, `qvncintegration.h`,

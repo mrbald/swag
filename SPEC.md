@@ -139,6 +139,16 @@ client evidence. Keep functional checks with each fix and relevant nonfunctional
 checks last. Add a short top-level README source-transplant/build/install/run guide,
 preserving the separate application and infrastructure packaging responsibilities.
 
+The next approved everyday-interaction batch preserves multiline workspace
+clipboard text, distinguishes keypad Enter from Return, supports the client's
+3440x1440 display at native framebuffer resolution, and qualifies actual Qt item
+drag-and-drop. Keep geometry bounded to 4096 per dimension and 4,953,600 total
+pixels, with corresponding bounded encoder/output budgets and a visible scaled
+fallback above the limit. Run focused functional regressions with each change,
+then relevant nonfunctional checks after integration, followed by another bounded
+review for overlooked everyday behavior. Clean runtime packaging and the blocked
+session-path audit remain outside this batch.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.
