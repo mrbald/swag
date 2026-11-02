@@ -107,6 +107,11 @@ decoded pixels, stream lifetime, negotiation changes and slow-reader recovery;
 rerun the original browser workflows and the same three network profiles before
 claiming improvement. Keep bounded queues and existing authentication unchanged.
 
+Follow up the measured local-latency regression with controlled timing evidence.
+Remove avoidable transport/scheduling delay where demonstrated, retaining lossless
+compression, bounded queues and WAN savings. Compare the same real-browser workload
+and keep the application executable unchanged; client qualification remains separate.
+
 # Authenticated topology and bank mock
 
 One app-host process manager owns every user's launcher and private RFB socket.

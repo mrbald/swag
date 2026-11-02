@@ -3,6 +3,7 @@
 import asyncio
 import json
 import struct
+import time
 import zlib
 
 import aiohttp
@@ -136,6 +137,18 @@ async def checks(url, output):
                 await rfb.ws.send_bytes(bytes([byte]))
             await rfb.pixels()
 
+        async def paced_burst(rfb):
+            await rfb.ws.send_bytes(encodings(6,0))
+            times = []
+            for _ in range(12):
+                await rfb.pixels((80,180,8,8))
+                times.append(time.monotonic())
+            elapsed = times[-1]-times[0]
+            # Small local replies must still be paced. Allow timing jitter;
+            # this lower bound detects accidental removal of burst limiting.
+            assert elapsed >= 11*.012, elapsed
+            return {'updates':len(times),'first_to_last_ms':round(elapsed*1000,2)}
+
         async def large_resize(rfb):
             await rfb.ws.send_bytes(encodings(6,-308,0)+protocol.request())
             assert (await rfb.update())['status'] == 0
@@ -205,6 +218,7 @@ async def checks(url, output):
         await check('withdraw_and_resume_dictionary',lambda r:dictionary(r,True))
         await check('pixel_format_change_same_stream',format_change)
         await check('fragmented_encoding_list',fragmented)
+        await check('small_updates_remain_paced',paced_burst)
         await check('maximum_frame_resize_same_stream',large_resize)
         await check('slow_reader_coalesces_and_recovers',slow_reader)
         await check('fresh_connection_after_pressure',equivalence)

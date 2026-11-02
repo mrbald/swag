@@ -48,6 +48,7 @@
 #include <QtWebSockets/QWebSocketServer>
 #include <qendian.h>
 #include <qthread.h>
+#include <cerrno>
 #include <cstring>
 #include <xkbcommon/xkbcommon.h>
 
@@ -58,6 +59,10 @@
 #include <Winsock2.h>
 #else
 #include <arpa/inet.h>
+#endif
+#ifdef Q_OS_LINUX
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 #endif
 
 #include <QtCore/QDebug>
@@ -740,6 +745,17 @@ void QVncServer::init()
                qPrintable(m_address.toString()), unsigned(m_port),
                qPrintable(serverSocket->errorString()));
     }
+#ifdef Q_OS_LINUX
+    // QWebSocket has no public socket option API in Qt 5.15. Linux copies this
+    // TCP option from the listening socket to each accepted connection.
+    const int noDelay = 1;
+    if (::setsockopt(int(serverSocket->nativeDescriptor()), IPPROTO_TCP,
+                     TCP_NODELAY, &noDelay, sizeof(noDelay)) != 0) {
+        qWarning("vncws: cannot enable TCP_NODELAY: %s", strerror(errno));
+    } else {
+        qCDebug(lcVnc) << "TCP_NODELAY enabled on listener";
+    }
+#endif
     qInfo("vncws: WebSocket listening on %s:%u",
           qPrintable(m_address.toString()), unsigned(m_port));
 

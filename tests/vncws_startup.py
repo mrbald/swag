@@ -150,5 +150,35 @@ with tempfile.TemporaryDirectory(prefix='swag-vncws-') as directory:
                     process.wait()
     check('inherited_listener_survives_exec_and_parent_close', inherited_listener)
 
+    def inherited_nodelay():
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1',0))
+            reservation.listen()
+            assert reservation.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)==0
+            with (Path(directory)/'nodelay.log').open('w+') as log:
+                process=subprocess.Popen(['/opt/swag/bin/swag-probe'],
+                    env=environment(f'vncws:fd={reservation.fileno()}',state),
+                    pass_fds=(reservation.fileno(),),stdout=log,stderr=subprocess.STDOUT)
+                try:
+                    deadline=time.monotonic()+5
+                    while reservation.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)!=1:
+                        assert process.poll() is None, 'Qt exited before configuring listener'
+                        assert time.monotonic()<deadline, 'TCP_NODELAY was not enabled'
+                        time.sleep(.05)
+                finally:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        process.kill();process.wait()
+            # The parent's descriptor references the socket configured by Qt.
+            # After Qt exits, verify Linux copies its option on actual accept.
+            with socket.create_connection(reservation.getsockname(),timeout=3):
+                accepted,_=reservation.accept()
+                with accepted:
+                    assert accepted.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)==1
+            return {'listener_nodelay':True,'accepted_connection_nodelay':True}
+    check('nodelay_inherited_by_accepted_connections', inherited_nodelay)
+
 print(json.dumps(results, indent=2))
 raise SystemExit(int(any(r['status'] != 'pass' for r in results)))

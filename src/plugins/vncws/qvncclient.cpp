@@ -172,6 +172,7 @@ QVncClient::QVncClient(QIODevice *clientSocket, QVncServer *server)
     connect(static_cast<QVncWebSocketStream *>(m_clientSocket),
             &QVncWebSocketStream::outputDrained, this, &QVncClient::onOutputDrained);
     m_updateTimer.setSingleShot(true);
+    m_updateTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_updateTimer, &QTimer::timeout, this, [this]() {
         m_updatePending = false;
         checkUpdate();
@@ -512,6 +513,8 @@ void QVncClient::checkUpdate()
 #if QT_CONFIG(cursor)
     if (m_dirtyCursor && m_supportCursor && m_server->screen()->clientCursor) {
         m_server->screen()->clientCursor->write(this);
+        if (m_state == Connected)
+            m_lastFramebufferUpdate.start();
         m_dirtyCursor = false;
         m_wantUpdate = false;
         return;
@@ -519,8 +522,11 @@ void QVncClient::checkUpdate()
 #endif
     const QRegion sendRegion = dirtyRegion();
     if (!sendRegion.isEmpty()) {
-        if (m_encoder)
+        if (m_encoder) {
             m_encoder->write();
+            if (m_state == Connected)
+                m_lastFramebufferUpdate.start();
+        }
         m_wantUpdate = false;
         m_dirtyRegion -= sendRegion;
     }
@@ -529,7 +535,9 @@ void QVncClient::checkUpdate()
 void QVncClient::sendEmptyUpdate()
 {
     const char header[4] = {0, 0, 0, 0};
-    m_clientSocket->write(header, sizeof(header));
+    if (m_clientSocket->write(header, sizeof(header)) == sizeof(header) &&
+        m_state == Connected)
+        m_lastFramebufferUpdate.start();
 }
 
 void QVncClient::sendExtendedDesktopSize(quint16 reason, quint16 status)
@@ -616,7 +624,11 @@ void QVncClient::scheduleUpdate()
 {
     if (!m_updatePending && !m_backpressureDeferred && m_state == Connected) {
         m_updatePending = true;
-        m_updateTimer.start(16);
+        // Space emitted frames by 16 ms while allowing the first frame after
+        // an idle period to run on the next event-loop turn.
+        const qint64 elapsed = m_lastFramebufferUpdate.isValid()
+            ? m_lastFramebufferUpdate.elapsed() : 16;
+        m_updateTimer.start(elapsed < 16 ? int(16 - elapsed) : 0);
     }
 }
 

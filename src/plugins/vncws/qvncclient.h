@@ -42,6 +42,7 @@
 
 #include <QObject>
 #include <QHash>
+#include <QElapsedTimer>
 #include <QTimer>
 
 #include "qvnc_p.h"
@@ -158,6 +159,7 @@ private:
     QHash<quint32, HeldKey> m_heldKeys;
     QTimer m_handshakeTimer;
     QTimer m_updateTimer;
+    QElapsedTimer m_lastFramebufferUpdate;
     QRect m_requestRect;
     bool m_discarded = false;
     bool m_dirtyCursor;
