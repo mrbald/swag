@@ -18,6 +18,8 @@ collected in [Findings and limits](docs/findings.md).
 For an existing multi-frame application, use the focused
 [Qt application porting guide](docs/integration/README.md): topology, application
 changes, window-manager/MDI choices, and reproduction checks.
+The [testing design memo](tests/README.md) explains scripted Qt widget interaction
+through noVNC, observation-based assertions, screenshot review, and check suites.
 
 ## Transplant the Qt WebSocket plugin into your application
 

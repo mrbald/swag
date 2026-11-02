@@ -219,6 +219,10 @@ their layout and may need scrolling or Tile. Do not recreate Qt on resize.
 
 ## Porting gate
 
+The [testing design memo](../../tests/README.md) explains how Playwright targets
+Qt widgets through observation geometry and browser input, and which assertions
+and visual checks need adapting to your application.
+
 Run the existing checks **sequentially** on an idle MDI demo; they change data
 and end test workspaces. These four harnesses require installed Google Chrome
 (`channel="chrome"`); `uv sync` installs the Python dependencies, not the browser.
