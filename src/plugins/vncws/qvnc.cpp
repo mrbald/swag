@@ -221,6 +221,8 @@ static const struct {
     { 0xffe4, Qt::Key_Control   },
     { 0xffe7, Qt::Key_Meta      },
     { 0xffe8, Qt::Key_Meta      },
+    { 0xffeb, Qt::Key_Meta      }, // noVNC Super_L
+    { 0xffec, Qt::Key_Meta      }, // noVNC Super_R
     { 0xffe9, Qt::Key_Alt       },
     { 0xffea, Qt::Key_Alt       },
 

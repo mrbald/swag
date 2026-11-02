@@ -282,6 +282,31 @@ class Probe:
             return {"value": self.state()["editor_text"]}
         self.check("unicode_keyboard", unicode_input)
 
+        def meta_modifier():
+            self.click("text_edit")
+            platform = self.page.evaluate("navigator.platform")
+            # Pinned noVNC remaps macOS left Command to Alt and right
+            # Command to Super_L. Other desktop platforms send Super_L/R.
+            mappings = [("MetaLeft", 0x08000000 if "Mac" in platform else 0x10000000),
+                        ("MetaRight", 0x10000000)]
+            for key, expected in mappings:
+                self.page.keyboard.down(key)
+                try:
+                    self.page.keyboard.press("k")
+                    expected_key = "Alt+K" if expected == 0x08000000 else "Meta+K"
+                    self.wait(lambda state: state["last_key"] == expected_key and
+                              state["keyboard_modifiers"] == expected)
+                finally:
+                    self.page.keyboard.up(key)
+                # xcb exposes the modifier mask attached to the last key event,
+                # so check a subsequent ordinary key rather than idle polling.
+                self.page.keyboard.press("j")
+                self.wait(lambda state: state["keyboard_modifiers"] == 0 and
+                          state["last_key"] == "J")
+            return {"platform": platform, "expected_modifier_mappings": mappings, "released_modifiers": 0,
+                    "scope": "pinned noVNC platform mapping through installed Chrome; not Windows/RDP interception qualification"}
+        self.check("meta_modifier_browser", meta_modifier)
+
         def clipboard_in():
             expected = "ClipboardFromBrowser42"
             self.page.locator("#clipboard-input").fill(expected)

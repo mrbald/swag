@@ -832,15 +832,30 @@ void QVncClient::pointerEvent()
             qBound(0, int(ev.x), screen.width() - 1),
             qBound(0, int(ev.y), screen.height() - 1));
         m_lastPointerPos = pos;
-        const int buttonStateChange = int(m_buttonState ^ ev.buttons);
-        QEvent::Type type = QEvent::MouseMove;
-        if (int(ev.buttons) > int(m_buttonState))
-            type = QEvent::MouseButtonPress;
-        else if (int(ev.buttons) < int(m_buttonState))
-            type = QEvent::MouseButtonRelease;
-        QWindowSystemInterface::handleMouseEvent(nullptr, pos, pos, ev.buttons, Qt::MouseButton(buttonStateChange),
-                                                 type, m_keymod);
-        m_buttonState = ev.buttons;
+        const int oldButtons = int(m_buttonState);
+        const int newButtons = int(ev.buttons);
+        if (oldButtons == newButtons) {
+            QWindowSystemInterface::handleMouseEvent(nullptr, pos, pos, ev.buttons,
+                                                     Qt::NoButton, QEvent::MouseMove, m_keymod);
+        } else {
+            // A single RFB mask can release and press different buttons.
+            // Qt expects one changed button and the matching intermediate mask
+            // per event; release the old buttons before pressing new ones.
+            for (const Qt::MouseButton button : {Qt::LeftButton, Qt::MiddleButton, Qt::RightButton}) {
+                if ((oldButtons & int(button)) && !(newButtons & int(button))) {
+                    m_buttonState = Qt::MouseButtons(int(m_buttonState) & ~int(button));
+                    QWindowSystemInterface::handleMouseEvent(nullptr, pos, pos,
+                        m_buttonState, button, QEvent::MouseButtonRelease, m_keymod);
+                }
+            }
+            for (const Qt::MouseButton button : {Qt::LeftButton, Qt::MiddleButton, Qt::RightButton}) {
+                if (!(oldButtons & int(button)) && (newButtons & int(button))) {
+                    m_buttonState |= button;
+                    QWindowSystemInterface::handleMouseEvent(nullptr, pos, pos,
+                        m_buttonState, button, QEvent::MouseButtonPress, m_keymod);
+                }
+            }
+        }
         if (ev.wheelMask) {
             QWindow *target = QGuiApplication::topLevelAt(pos.toPoint());
             const QPointF local = target ? target->mapFromGlobal(pos.toPoint()) : pos;
