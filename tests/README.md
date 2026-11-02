@@ -128,6 +128,47 @@ These checks change demo data and end test workspaces. Switching UI mode recreat
 the stack and ends existing workspaces. Fault checks also operate on the local
 demo; the startup fixture recreates the stack and restores a healthy instance.
 
+## Unified vncws functional gate
+
+Use the existing qualified `localhost/swag-probe-ws:dev` image and installed
+Google Chrome, then run:
+
+```sh
+.venv/bin/python tools/check_vncws.py --list
+.venv/bin/python tools/check_vncws.py --port 6300
+```
+
+The equivalent CMake target is `vncws-functional-check`; unlike the older probe
+check targets, it does not rebuild images. Pass runner options directly with the
+Python command when selecting suites, ports or output locations.
+
+The default gate runs protocol, input, clipboard, compression and resize wire
+checks, followed by real noVNC smoke, everyday interactions and outbound clipboard
+failure/recovery checks. It runs suites
+sequentially and reuses the chosen port pair. It does not build images or run
+network/soak measurements. Standalone cursor/ultrawide fixture tests and visual
+review remain separate gates.
+
+`--list` prints the available suites as JSON without running anything. Repeat
+`--suite` to select a subset; duplicate names are ignored and isolated probes
+always precede shared-demo suites. Shared-demo checks are opt-in because they
+change data and end workspaces. For example, with the local vncws MDI stack up:
+
+```sh
+.venv/bin/python tools/check_vncws.py --suite input --suite everyday
+.venv/bin/python tools/check_vncws.py --suite app-mdi --suite app-workspace \
+  --origin http://localhost:6081
+```
+
+`--engine` selects the container engine for harnesses that launch containers.
+Each invocation creates a unique directory beneath `artifacts/qt-ws-functional/`
+(or `--output`), containing per-suite logs/results and `summary.json`. The same
+summary is printed to stdout; progress goes to stderr. A suite passes only when
+its process exits successfully and its nonempty result report contains only
+passing checks. The gate exits nonzero on failure and skips subsequent suites;
+`--keep-going` retains the failing exit status while running the remaining suites.
+Neither an automated pass nor a changed screenshot hash replaces visual review.
+
 ## Evidence and limits
 
 Results, screenshots and failure state are retained under ignored `artifacts/`:

@@ -25,6 +25,9 @@ if(SWAG_CONTAINER_ONLY)
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/smoke.py --engine "${SWAG_ENGINE}" --backend qt-ws
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_dependencies(probe-ws-check probe-ws-image)
+    add_custom_target(vncws-functional-check
+        COMMAND "${SWAG_TEST_PYTHON}" tools/check_vncws.py --engine "${SWAG_ENGINE}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_custom_target(probe-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/smoke.py --engine "${SWAG_ENGINE}" --backend tiger --transport unix
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)

@@ -50,5 +50,5 @@ Root maintains this checklist. No separate task system.
 - [x] Supply Japanese font coverage; verify actual fallback glyphs and 38 browser checks, restore the demo, commit and push the slice.
 
 - [x] Surface unavailable oversized outbound clipboard text; verify real noVNC/shell failure and recovery plus functional regressions, commit/push.
-- [ ] Add one functional regression entry point, test failure propagation and run all selected suites, commit/push.
+- [x] Add one functional regression entry point; pass 7 runner contract tests, 126 default checks and 26 selected app checks, commit/push.
 - [ ] Qualify the installed probe/plugin in a clean runtime-only EL8 image, document dependencies, commit/push.
