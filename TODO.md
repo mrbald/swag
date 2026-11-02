@@ -47,4 +47,4 @@ Root maintains this checklist. No separate task system.
 - [x] Integrate, pass three ultrawide network profiles and a five-minute two-user soak, restore the demo, and record the next everyday-behavior review candidates.
 - [x] Reproduce and fix autorepeat semantics; pass 65 focused checks, commit and push the slice.
 - [x] Fix the keyboard Context Menu mapping and Qt context event; pass 60 focused checks, commit and push the slice.
-- [ ] Supply Japanese font coverage for the demonstrated glyph gap; test, commit and push the slice.
+- [x] Supply Japanese font coverage; verify actual fallback glyphs and 38 browser checks, restore the demo, commit and push the slice.

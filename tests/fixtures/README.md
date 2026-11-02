@@ -31,3 +31,21 @@ pixel equivalence, exact opaque cursor pixels/mask, and paused-reader recovery.
 Pass `--qt-log` for the acceptance gate: that additionally requires actual queue
 deferral/resumption. When running in a container, publish the fixture port only
 on host loopback and retain its Qt log in a mounted artifact directory.
+
+## Japanese fallback glyphs
+
+`font_coverage.cpp` lays out `東京` using the probe's DejaVu Sans 10 font and
+reports Qt's actual fallback families and glyph indexes as JSON. It exits nonzero
+if either character is missing. Run it in the image being qualified:
+
+```sh
+c++ -std=c++17 -fPIC tests/fixtures/font_coverage.cpp -o /tmp/font-coverage \
+  $(pkg-config --cflags --libs Qt5Widgets)
+QT_PLUGIN_PATH=/opt/swag/plugins \
+QT_QPA_PLATFORM=vncws:size=1280x800:port=5900 /tmp/font-coverage
+```
+
+The supplied EL8 images install `google-noto-sans-cjk-jp-fonts` for this fallback.
+Also inspect the probe's initial Draft text through noVNC: preserving Unicode
+codepoints alone does not prove that readable glyphs are rendered. This sample
+does not qualify IME input or complete coverage of other scripts.

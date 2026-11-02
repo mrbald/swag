@@ -503,6 +503,17 @@ Evidence: `artifacts/qt-ws-slices/menu-verified.json`. The earlier Tiger autorep
 comparison passed, but a later run intermittently classified duplicated key-downs
 as fresh presses; this reference limitation remains recorded in the evidence.
 
+The supplied EL8 image now includes `google-noto-sans-cjk-jp-fonts`
+(`20230817-1.el8_10.noarch` in this run). With the probe's default DejaVu Sans 10,
+Qt previously produced two missing glyphs for `東京`; it now falls back to
+Noto Sans CJK JP with two nonzero glyphs. The same probe/noVNC client visibly
+renders both characters through vncws and Tiger. The glyph diagnostic and 38
+browser checks passed; evidence is `artifacts/qt-ws-slices/fonts-verified.json`.
+Qualification used font-package overlays on the verified images; the shared
+Containerfile records the dependency for subsequent full builds. The original
+application executable is unchanged. This covers the demonstrated Japanese
+fallback gap; client font selection, other scripts and IME still need validation.
+
 The client reports RHEL 8 with distribution Qt 5, C++23 and GCC Toolset 15.
 The browser client is understood to be Chrome on a Windows VM, probably in Azure;
 Azure hosting is unconfirmed. This is close to the tested EL8 stack, but the exact

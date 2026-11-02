@@ -13,7 +13,8 @@ RUN dnf -y install epel-release dnf-plugins-core \
        qt5-qtbase-devel qt5-qtbase-gui \
        python3.12 python3.12-pip \
        tigervnc-server-minimal openbox xorg-x11-utils \
-       dejavu-sans-fonts fontconfig procps-ng iproute curl tar \
+       dejavu-sans-fonts google-noto-sans-cjk-jp-fonts \
+       fontconfig procps-ng iproute curl tar \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 

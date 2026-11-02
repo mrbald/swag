@@ -37,6 +37,11 @@ expose this listener only within a trusted access boundary. The Extended
 Clipboard pseudo-encoding transfers UTF-8 text through a bounded zlib payload
 when the viewer supports it. Unnegotiated viewers use RFB's Latin-1 text path.
 Clipboard text and compressed messages are limited to 1 MiB.
+Glyph rendering uses fonts installed with the Qt application, regardless of
+the browser's fonts. The supplied EL8 images include
+`google-noto-sans-cjk-jp-fonts` for Japanese fallback; include appropriate fonts
+in the client application's runtime image as well. Unicode clipboard support
+does not establish font coverage or IME support.
 The supplied SWAG browser pages validate normalized UTF-8 and the pinned noVNC
 compressed payload before sending. Rejected text remains editable with a visible
 error. The plugin still disconnects invalid/oversized inbound protocol messages;
