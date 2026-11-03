@@ -209,19 +209,26 @@ print(json.dumps(result))
                         manifest_path = STACK / "workspaces/users" / actor.user / actor.session["generation"] / "launcher.json"
                         manifest = json.loads(manifest_path.read_text())
                         assert manifest["render_backend"] == self.render_backend, manifest
-                        if self.render_backend == "qt-ws":
+                        if self.render_backend in {"qt-ws", "qt-unix"}:
                             assert set(manifest["helpers"]) == {"qt"}, manifest
-                            endpoint = f"127.0.0.1:{manifest['ws_port']}"
-                            assert any(endpoint == line.split()[3] for line in listeners.splitlines()[1:]), listeners
+                            if self.render_backend == "qt-ws":
+                                endpoint = f"127.0.0.1:{manifest['ws_port']}"
+                                assert any(endpoint == line.split()[3] for line in listeners.splitlines()[1:]), listeners
+                            else:
+                                endpoint = manifest['rfb_socket']
+                                mode = self.command("exec", "swag-host", "stat", "--format=%a", endpoint).stdout.strip()
+                                assert mode == "600", mode
+                                owned = self.command("exec", "swag-host", "ss", "-ltnp").stdout
+                                assert f"pid={manifest['app_pid']}," not in owned, owned
                             assert manifest["app_pid"] == actor.session["pid"]
                             endpoints.append(endpoint)
-                    if self.render_backend == "qt-ws":
+                    if self.render_backend in {"qt-ws", "qt-unix"}:
                         assert len(set(endpoints)) == len(self.actors), endpoints
                         published = self.command("port", "swag-host").stdout.strip()
                         assert not published, published
                     return {"spoofed_identity_ignored":True,"csrf":403,"origin":403,
                             "cross_user_generation":404,"render_backend":self.render_backend,
-                            "private_loopback_endpoints":endpoints,"public_rfb_port":False}
+                            "private_endpoints":endpoints,"public_rfb_port":False}
                 self.check("proxy_and_viewer_boundaries", boundaries)
 
                 def entitlements():
@@ -353,7 +360,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine",default="podman")
     parser.add_argument("--origin",default="http://localhost:6081")
-    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger")
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws", "qt-unix"), default="tiger")
     parser.add_argument("--output", type=Path, default=OUTPUT)
     args=parser.parse_args()
     OUTPUT = args.output.resolve()

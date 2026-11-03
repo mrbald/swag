@@ -43,10 +43,10 @@ def write(path: Path, contents: str, mode=0o600):
 def validate_mode(ui_mode: str, window_manager: str | None, render_backend: str):
     if ui_mode not in {"single", "mdi"} or window_manager not in {None, "none", "openbox"}:
         raise ValueError("invalid GUI mode or window manager")
-    if render_backend not in {"tiger", "qt-ws"}:
+    if render_backend not in {"tiger", "qt-ws", "qt-unix"}:
         raise ValueError("invalid render backend")
-    if render_backend == "qt-ws" and (ui_mode != "mdi" or window_manager == "openbox"):
-        raise ValueError("qt-ws requires --ui-mode mdi and no external window manager")
+    if render_backend in {"qt-ws", "qt-unix"} and (ui_mode != "mdi" or window_manager == "openbox"):
+        raise ValueError("direct Qt requires --ui-mode mdi and no external window manager")
 
 
 def configure(port: int, dns: str = "127.0.0.11", ui_mode: str = "single",
@@ -129,7 +129,7 @@ def down(engine: str):
 
 def build(engine: str, render_backend: str = "tiger"):
     targets = [("app", APP_IMAGE), ("edge", EDGE_IMAGE)]
-    if render_backend == "qt-ws":
+    if render_backend in {"qt-ws", "qt-unix"}:
         targets.append(("app-ws", APP_WS_IMAGE))
     for target, tag in targets:
         run(engine, "build", "--target", target, "-f", "containers/Containerfile", "-t", tag, ".")
@@ -177,7 +177,7 @@ def up(engine: str, port: int, ui_mode: str = "single", window_manager: str | No
            ["start-dev", "--import-realm"])
     launch("swag-bank", APP_IMAGE, [*keep_id, "--ip", bank_address, "--env-file", CONFIG / "bank.env",
            "-v", f"{STATE / 'data'}:/data:Z", "--entrypoint", "/usr/bin/python3.12"], ["-m", "swag_bank"])
-    host_image = APP_WS_IMAGE if render_backend == "qt-ws" else APP_IMAGE
+    host_image = APP_WS_IMAGE if render_backend in {"qt-ws", "qt-unix"} else APP_IMAGE
     launch("swag-host", host_image, [*keep_id, "--env-file", CONFIG / "host.env",
            "-v", f"{STATE / 'workspaces'}:/artifacts:Z"])
     launch("swag-oauth", OAUTH_IMAGE, ["-v", f"{CONFIG / 'oauth.cfg'}:/etc/swag/oauth.cfg:ro,Z"],
@@ -224,8 +224,8 @@ def main():
                         help="GUI mode for newly launched workspaces (up only)")
     parser.add_argument("--window-manager", choices=("none", "openbox"),
                         help="override: single defaults to Openbox, MDI defaults to none")
-    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger",
-                        help="optional in-process Qt WebSocket renderer; up requires MDI mode")
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws", "qt-unix"), default="tiger",
+                        help="optional in-process Qt renderer; up requires MDI mode")
     args = parser.parse_args()
     if args.action == "build":
         build(args.engine, args.render_backend)

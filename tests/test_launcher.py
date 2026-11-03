@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import socket
@@ -11,6 +12,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from swag_session import launcher
+from swag_session.processes import reserve_unix_listener
 
 
 class DesktopMode(unittest.TestCase):
@@ -58,17 +60,32 @@ class DesktopMode(unittest.TestCase):
                         launcher.main()
                     spawn.assert_not_called()
 
+    def test_qt_unix_requires_mdi_without_external_window_manager(self):
+        self.assertEqual(launcher.resolve_render_backend({"SWAG_RENDER_BACKEND": "qt-unix"}),
+                         "qt-unix")
+        self.assertEqual(launcher.resolve_desktop_mode({"SWAG_UI_MODE": "mdi"}, "qt-unix"),
+                         ("mdi", "none"))
+        for environment in ({}, {"SWAG_UI_MODE": "mdi", "SWAG_WINDOW_MANAGER": "openbox"}):
+            with self.subTest(environment=environment), self.assertRaises(ValueError):
+                launcher.resolve_desktop_mode(environment, "qt-unix")
+
 
 class LauncherChildren(unittest.TestCase):
     def launch_workspace(self, environment_overrides):
         """Exercise child selection and the persisted manifest with fake children."""
-        with tempfile.TemporaryDirectory(prefix="swag-launcher-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="swag-l-", dir="/tmp") as temporary, ExitStack() as stack:
             root = Path(temporary)
             generation = "a" * 32
             launch_runtime = root / "runtime" / "users" / "alice" / generation
-            launch_runtime.mkdir(parents=True)
+            launch_runtime.mkdir(parents=True, mode=0o700)
             rfb = launch_runtime / "rfb.sock"
-            rfb.touch()
+            reservation = None
+            if environment_overrides.get("SWAG_RENDER_BACKEND") == "qt-unix":
+                reservation = stack.enter_context(reserve_unix_listener(rfb))
+                environment_overrides = {**environment_overrides,
+                                         launcher.QT_WS_LISTEN_FD: str(os.dup(reservation.fileno()))}
+            else:
+                rfb.touch()
             artifacts = root / "artifacts"
             artifacts.mkdir()
             state = artifacts / "state.json"
@@ -106,6 +123,9 @@ class LauncherChildren(unittest.TestCase):
                     patch.object(launcher.subprocess, "Popen", side_effect=spawn), \
                     patch.object(Path, "is_socket", return_value=True):
                 self.assertEqual(launcher.main(), 0)
+            if reservation is not None:
+                self.assertGreaterEqual(reservation.fileno(), 0)
+                self.assertTrue(rfb.is_socket())  # Only the manager removes the pathname.
             return commands, json.loads((artifacts / "launcher.json").read_text())
 
     def test_default_still_launches_openbox_and_records_actual_children(self):
@@ -166,6 +186,54 @@ class LauncherChildren(unittest.TestCase):
         for _, environment, passed in commands:
             self.assertNotIn(launcher.QT_WS_LISTEN_FD, environment)
             self.assertEqual(passed, ())
+
+    def test_qt_unix_forwards_reserved_descriptor_and_records_socket_identity(self):
+        commands, manifest = self.launch_workspace({
+            "SWAG_UI_MODE": "mdi", "SWAG_RENDER_BACKEND": "qt-unix",
+        })
+        self.assertEqual(len(commands), 1)
+        command, environment, passed = commands[0]
+        self.assertEqual(command[0], "/opt/swag/bin/swag-desktop")
+        self.assertEqual(len(passed), 1)
+        self.assertEqual(environment["QT_QPA_PLATFORM"], f"vncws:size=1280x800:fd={passed[0]}")
+        self.assertNotIn(launcher.QT_WS_LISTEN_FD, environment)
+        self.assertNotIn("DISPLAY", environment)
+        self.assertNotIn("ws_port", manifest)
+        self.assertEqual(manifest["render_backend"], "qt-unix")
+        self.assertEqual(manifest["helpers"], {"qt": 2000})
+        self.assertIsInstance(manifest["rfb_device"], int)
+        self.assertGreater(manifest["rfb_inode"], 0)
+        with self.assertRaises(OSError):
+            os.fstat(passed[0])
+
+    def test_qt_unix_rejects_missing_invalid_and_wrong_family_descriptors(self):
+        with tempfile.TemporaryDirectory(prefix="swag-fd-", dir="/tmp") as temporary:
+            path = Path(temporary) / "rfb.sock"
+            for value in (None, "garbage", "-1", "0", "2"):
+                environment = {} if value is None else {launcher.QT_WS_LISTEN_FD: value}
+                with self.subTest(value=value), patch.dict(os.environ, environment, clear=True):
+                    with self.assertRaises(ValueError):
+                        launcher.workspace_unix_listener(path)
+            with launcher.reserve_ws_listener() as reservation:
+                inherited = os.dup(reservation.fileno())
+                with patch.dict(os.environ, {launcher.QT_WS_LISTEN_FD: str(inherited)}):
+                    with self.assertRaises(ValueError):
+                        launcher.workspace_unix_listener(path)
+                with self.assertRaises(OSError):
+                    os.fstat(inherited)
+
+    def test_qt_unix_rejects_wrong_path_and_insecure_socket(self):
+        with tempfile.TemporaryDirectory(prefix="swag-fd-", dir="/tmp") as temporary:
+            path = Path(temporary) / "rfb.sock"
+            with reserve_unix_listener(path) as reservation:
+                for expected, mode in ((path.with_name("other.sock"), 0o600), (path, 0o666)):
+                    path.chmod(mode)
+                    inherited = os.dup(reservation.fileno())
+                    with patch.dict(os.environ, {launcher.QT_WS_LISTEN_FD: str(inherited)}):
+                        with self.assertRaises(ValueError):
+                            launcher.workspace_unix_listener(expected)
+                    with self.assertRaises(OSError):
+                        os.fstat(inherited)
 
     def test_inherited_listener_rejects_unbound_or_non_loopback_socket(self):
         for address in (None, ("0.0.0.0", 0)):

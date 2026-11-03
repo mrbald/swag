@@ -8,10 +8,65 @@ import os
 from pathlib import Path
 import signal
 import socket
+import stat
 import sys
 
 
 QT_WS_LISTEN_FD = "SWAG_QT_WS_LISTEN_FD"
+
+
+def unix_socket_identity(path: Path) -> tuple[int, int]:
+    """Validate the private filesystem endpoint without following its final link."""
+    if (not path.is_absolute() or "\0" in str(path)
+            or len(os.fsencode(path)) > (103 if sys.platform == "darwin" else 107)):
+        raise ValueError("Unix listener requires a short absolute filesystem path")
+    parent = path.parent.lstat()
+    if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid()
+            or stat.S_IMODE(parent.st_mode) != 0o700):
+        raise ValueError("Unix listener directory must be owned by this user with mode 0700")
+    entry = path.lstat()
+    if (not stat.S_ISSOCK(entry.st_mode) or entry.st_uid != os.geteuid()
+            or stat.S_IMODE(entry.st_mode) != 0o600):
+        raise ValueError("Unix listener must be an owned mode-0600 socket")
+    return entry.st_dev, entry.st_ino
+
+
+def unlink_owned_socket(path: Path, identity: tuple[int, int]) -> None:
+    """Never remove a replacement path when releasing a generation's socket."""
+    try:
+        entry = path.lstat()
+    except FileNotFoundError:
+        return
+    if (stat.S_ISSOCK(entry.st_mode) and entry.st_uid == os.geteuid()
+            and (entry.st_dev, entry.st_ino) == identity):
+        path.unlink()
+
+
+def reserve_unix_listener(path: Path) -> socket.socket:
+    """Bind exclusively in an existing private generation directory."""
+    if (not path.is_absolute() or "\0" in str(path)
+            or len(os.fsencode(path)) > (103 if sys.platform == "darwin" else 107)):
+        raise ValueError("Unix listener requires a short absolute filesystem path")
+    parent = path.parent.lstat()
+    if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid()
+            or stat.S_IMODE(parent.st_mode) != 0o700):
+        raise ValueError("Unix listener directory must be owned by this user with mode 0700")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    identity = None
+    try:
+        # bind refuses occupied paths, including symlinks and stale sockets.
+        listener.bind(str(path))
+        entry = path.lstat()
+        identity = entry.st_dev, entry.st_ino
+        path.chmod(0o600)
+        listener.listen(16)
+        unix_socket_identity(path)
+        return listener
+    except BaseException:
+        listener.close()
+        if identity is not None:
+            unlink_owned_socket(path, identity)
+        raise
 
 
 def reserve_ws_listener() -> socket.socket:

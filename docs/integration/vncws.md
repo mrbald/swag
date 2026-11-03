@@ -1,4 +1,4 @@
-# Building the direct WebSocket plugin with a client application
+# Building the direct Qt plugin with a client application
 
 Copy `src/plugins/vncws/` as a directory and build it against the client's Qt
 development packages. Its standalone CMake build requires CMake 3.16+, C++17,
@@ -30,7 +30,7 @@ the intended isolation. Qt logging can otherwise go to the system journal on
 EL8; `QT_FORCE_STDERR_LOGGING=1` directs startup errors to the captured log.
 Invalid configuration and bind failures terminate startup.
 
-The plugin serves binary WebSocket/RFB only; the reverse proxy serves noVNC and
+In TCP mode the plugin serves binary WebSocket/RFB; the reverse proxy serves noVNC and
 terminates TLS/authentication. The launcher supplies application identity through
 the application's own contract. The plugin does not interpret a user ID or
 authenticate viewers. Every WebSocket connection must be authorized and routed
@@ -47,10 +47,68 @@ negotiated UTF-8 clipboard with Latin-1 fallback. The RFB handshake deadline is 
 are capped at 1 MiB, output queue at 32 MiB, encoding hints and distinct held
 keys at 256. Successive pixel updates are spaced by 16 ms; after idle the next
 update is queued immediately. Updates pause above 1 MiB of local
-WebSocket output backlog, resuming below 512 KiB. Compressed updates are staged
+transport output backlog, resuming below 512 KiB. Compressed updates are staged
 under a 24 MiB cap before sending. The 32 MiB hard output cap still disconnects
 an overflowing viewer; this is bounded local-transport pacing, not adaptive WAN
 congestion control.
+
+## Unix socket transport
+
+Select `qt-unix` to run the same plugin and Qt executable over raw RFB on a
+filesystem Unix socket. The browser still uses authenticated binary WebSocket;
+the session manager bridges it directly to the socket, with no websockify helper
+in the application path. The isolated probe uses websockify as its test bridge.
+
+```sh
+python3.12 tools/app.py build --render-backend qt-unix
+python3.12 tools/app.py up --ui-mode mdi --render-backend qt-unix
+# Existing image: isolated protocol and Chrome/noVNC functional checks
+.venv/bin/python tools/check_vncws.py --backend qt-unix
+# Running authenticated application
+cmake --build --preset container --target app-unix-check
+```
+
+`socket=/absolute/path` creates a standalone listener; `fd=N` adopts an already
+listening Unix or loopback TCP descriptor. Neither may be combined with `addr`
+or `port`, and `socket` and `fd` are mutually exclusive. The Unix parent must
+exist, have mode `0700`, belong to the current UID, and use a canonical path
+without symlinks. The socket must fit Linux's pathname limit and contain neither
+`:` nor `=`. Occupied paths are rejected, never removed to make startup succeed.
+A new socket has mode `0600`. Standalone shutdown removes only its own inode;
+an inherited listener never removes the supervisor's path.
+
+The manager reserves `/run/swag/users/{user}/{generation}/rfb.sock`, retains the
+listener through locked teardown, and passes `SWAG_QT_WS_LISTEN_FD` through the
+launcher to Qt. That environment name is retained for compatibility with TCP.
+Only Qt accepts connections, without calling `listen()` again. Admission checks
+the generation, process identities and socket device/inode before and after
+dialing; Linux `SO_PEERCRED` must identify the manager that created the listener.
+Teardown closes the viewer and stops the acceptor before releasing the listener
+and unlinking its matching inode. Replacement paths are preserved.
+
+Qt has no TCP listener in this mode. Other UIDs are excluded by filesystem
+permissions; this does not isolate users who share the service UID. Authentication,
+Origin checks, TLS and session lifetime still belong to the manager and proxy.
+The existing framing limits, clipboard, input, compression, resizing, takeover
+and bounded output pacing apply to both transports. The standalone integration
+example is also in the [top-level README](../../README.md).
+
+
+For native Linux socket acceptance (including a real second UID):
+
+```sh
+mkdir -p artifacts/unix-native
+podman run --rm --name swag-unix-acceptance --user 0 --entrypoint python3.12 \
+  -v "$PWD/tests/vncws_unix.py:/tmp/check.py:ro,Z" \
+  -v "$PWD/artifacts/unix-native:/artifacts:Z" \
+  localhost/swag-probe-ws:dev /tmp/check.py --output /artifacts
+```
+
+The default Unix functional gate has 125 checks. The TCP/WebSocket gate has 126:
+its slow-browser receiver check directly pressures Qt, while the Unix probe's
+websockify bridge buffers frames. Unix backpressure is measured separately by
+`paused_reader_defers_and_recovers` in the native suite; the bridge run does not
+claim that result.
 
 ## Verification retained in this repository
 

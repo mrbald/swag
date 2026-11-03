@@ -72,17 +72,26 @@ class FunctionalGateTests(unittest.TestCase):
             self.assertEqual([row['status'] for row in report['suites']], ['fail', 'skipped'])
             self.assertEqual(report['suites'][0]['returncode'], 7)
 
-    def test_outbound_clipboard_uses_fixed_backend_harness_arguments(self):
+    def test_outbound_clipboard_receives_selected_backend(self):
         with tempfile.TemporaryDirectory() as temporary:
             code, _, called = self.invoke(temporary, '--suite', 'outbound-clipboard',
-                                           '--engine', 'docker', '--port', '6402', execute=self.passed)
+                                           '--engine', 'docker', '--port', '6402', '--backend', 'qt-unix', execute=self.passed)
             self.assertEqual(code, 0)
             argv = called.call_args.args[0]
             self.assertTrue(argv[1].endswith('tests/browser/outbound_clipboard.py'))
             self.assertIn('docker', argv)
             self.assertIn('6402', argv)
-            self.assertNotIn('--backend', argv)
+            self.assertEqual(argv[argv.index('--backend')+1], 'qt-unix')
             self.assertNotIn('--workspace-origin', argv)
+
+    def test_unix_backend_reaches_wire_browser_and_application_suites(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            code, report, called = self.invoke(temporary, '--backend', 'qt-unix',
+                '--suite', 'input', '--suite', 'smoke', '--suite', 'app-mdi', execute=self.passed)
+            self.assertEqual(code, 0)
+            self.assertEqual(report['backend'], 'qt-unix')
+            for call in called.call_args_list:
+                self.assertIn('qt-unix', call.args[0])
 
     def test_failed_assertion_overrides_zero_exit_and_keep_going_runs_later_suite(self):
         def execute(argv, **kwargs):

@@ -13,7 +13,7 @@ if(SWAG_CONTAINER_ONLY)
     add_custom_target(probe-image
         COMMAND "${SWAG_PYTHON}" tools/probe.py build --engine "${SWAG_ENGINE}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
-    foreach(backend qt tiger qt-ws)
+    foreach(backend qt tiger qt-ws qt-unix)
         add_custom_target(probe-${backend}
             COMMAND "${SWAG_PYTHON}" tools/probe.py run --engine "${SWAG_ENGINE}" --backend ${backend}
             WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
@@ -27,6 +27,9 @@ if(SWAG_CONTAINER_ONLY)
     add_dependencies(probe-ws-check probe-ws-image)
     add_custom_target(vncws-functional-check
         COMMAND "${SWAG_TEST_PYTHON}" tools/check_vncws.py --engine "${SWAG_ENGINE}"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(vncunix-functional-check
+        COMMAND "${SWAG_TEST_PYTHON}" tools/check_vncws.py --engine "${SWAG_ENGINE}" --backend qt-unix
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_custom_target(probe-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/smoke.py --engine "${SWAG_ENGINE}" --backend tiger --transport unix
@@ -52,6 +55,12 @@ if(SWAG_CONTAINER_ONLY)
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_custom_target(app-ws-up
         COMMAND "${SWAG_PYTHON}" tools/app.py up --engine "${SWAG_ENGINE}" --ui-mode mdi --render-backend qt-ws
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-unix-up
+        COMMAND "${SWAG_PYTHON}" tools/app.py up --engine "${SWAG_ENGINE}" --ui-mode mdi --render-backend qt-unix
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
+    add_custom_target(app-unix-check
+        COMMAND "${SWAG_TEST_PYTHON}" tools/check_vncws.py --engine "${SWAG_ENGINE}" --backend qt-unix --suite app-mdi --suite app-workspace --suite app-clipboard
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}" USES_TERMINAL)
     add_custom_target(app-ws-check
         COMMAND "${SWAG_TEST_PYTHON}" tests/browser/mdi.py --engine "${SWAG_ENGINE}" --render-backend qt-ws --output artifacts/qt-ws-mdi/mdi

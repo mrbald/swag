@@ -32,7 +32,8 @@ The input path depends on the renderer:
 
 ```text
 TigerVNC: Playwright -> browser -> noVNC/RFB -> Xvnc/X11 -> Qt widget
-vncws:    Playwright -> browser -> noVNC/RFB over WebSocket -> Qt QPA -> Qt widget
+qt-ws:    Playwright -> browser -> noVNC/RFB over WebSocket -> Qt QPA -> Qt widget
+qt-unix:  Playwright -> browser -> noVNC/WebSocket -> bridge -> Unix RFB -> Qt QPA -> Qt widget
 ```
 
 For example, with an actor connected and a form open:
@@ -189,3 +190,16 @@ synthetic network/soak runs, ultrawide acceptance and Japanese glyph verificatio
 Ordinary functional checks alone do not establish those properties. Actual client
 Qt/private-library compatibility, Windows/RDP keyboard layouts and IMEs, broader
 font coverage and production capacity remain separate qualification work.
+
+Unix transport checks use `tools/check_vncws.py --backend qt-unix` (or
+`vncunix-functional-check`) against the same probe image. Authenticated application
+checks use `app-unix-check`; network and soak accept `--render-backend qt-unix`.
+[Native socket acceptance](vncws_unix.py) additionally exercises filesystem
+permissions with a different UID, descriptor/path validation, raw framing,
+backpressure, takeover and ownership-aware cleanup inside the Linux probe image.
+These complement browser checks; they do not establish isolation between
+processes sharing a UID.
+
+The Unix functional gate reports 125 checks; direct TCP reports 126. Unix
+backpressure is verified in the native suite because the standalone probe
+websockify bridge buffers frames; see the compression run’s `scope.json`.

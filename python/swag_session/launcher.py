@@ -14,13 +14,13 @@ import sys
 import time
 
 from .processes import (QT_WS_LISTEN_FD, exclusive_lock, group_alive,
-                        parent_death_signal, reserve_ws_listener)
+                        parent_death_signal, reserve_ws_listener, unix_socket_identity)
 
 
 def resolve_render_backend(environment: Mapping[str, str]) -> str:
     backend = environment.get("SWAG_RENDER_BACKEND", "tiger")
-    if backend not in {"tiger", "qt-ws"}:
-        raise ValueError("SWAG_RENDER_BACKEND must be tiger or qt-ws")
+    if backend not in {"tiger", "qt-ws", "qt-unix"}:
+        raise ValueError("SWAG_RENDER_BACKEND must be tiger, qt-ws or qt-unix")
     return backend
 
 
@@ -30,14 +30,14 @@ def resolve_desktop_mode(environment: Mapping[str, str],
     ui_mode = environment.get("SWAG_UI_MODE", "single")
     if ui_mode not in {"single", "mdi"}:
         raise ValueError("SWAG_UI_MODE must be single or mdi")
-    if render_backend == "qt-ws" and ui_mode != "mdi":
-        raise ValueError("qt-ws requires SWAG_UI_MODE=mdi")
+    if render_backend in {"qt-ws", "qt-unix"} and ui_mode != "mdi":
+        raise ValueError(f"{render_backend} requires SWAG_UI_MODE=mdi")
     window_manager = environment.get("SWAG_WINDOW_MANAGER",
                                      "none" if ui_mode == "mdi" else "openbox")
     if window_manager not in {"openbox", "none"}:
         raise ValueError("SWAG_WINDOW_MANAGER must be openbox or none")
-    if render_backend == "qt-ws" and window_manager != "none":
-        raise ValueError("qt-ws requires SWAG_WINDOW_MANAGER=none")
+    if render_backend in {"qt-ws", "qt-unix"} and window_manager != "none":
+        raise ValueError(f"{render_backend} requires SWAG_WINDOW_MANAGER=none")
     return ui_mode, window_manager
 
 
@@ -102,6 +102,25 @@ def workspace_ws_listener() -> socket.socket:
         raise
 
 
+def workspace_unix_listener(path: Path) -> socket.socket:
+    """Adopt the manager's Unix reservation; the manager owns path cleanup."""
+    descriptor = int(os.environ.pop(QT_WS_LISTEN_FD, "-1"))
+    if descriptor < 3:
+        raise ValueError("qt-unix requires the manager's inherited listener")
+    listener = socket.socket(fileno=descriptor)
+    try:
+        if (listener.family != socket.AF_UNIX or listener.type != socket.SOCK_STREAM
+                or listener.getsockname() != str(path)
+                or (sys.platform == "linux" and not listener.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_ACCEPTCONN))):
+            raise ValueError("inherited Unix listener does not match this generation")
+        unix_socket_identity(path)
+        return listener
+    except BaseException:
+        listener.close()
+        raise
+
+
 def main() -> int:
     # Reject configuration errors before locks or child processes are created.
     render_backend = resolve_render_backend(os.environ)
@@ -125,7 +144,7 @@ def main() -> int:
         "render_backend": render_backend,
         "ui_mode": ui_mode, "window_manager": window_manager, "helpers": {},
     }
-    if render_backend == "tiger":
+    if render_backend in {"tiger", "qt-unix"}:
         metadata["rfb_socket"] = str(rfb)
     children: list[tuple[str, subprocess.Popen[bytes]]] = []
     logs = []
@@ -200,8 +219,13 @@ def main() -> int:
             app = launch("qt", ["/opt/swag/bin/swag-desktop"])
         else:
             os.environ.pop("DISPLAY", None)
-            ws_listener = workspace_ws_listener()
-            metadata["ws_port"] = ws_listener.getsockname()[1]
+            if render_backend == "qt-unix":
+                ws_listener = workspace_unix_listener(rfb)
+                device, inode = unix_socket_identity(rfb)
+                metadata.update(rfb_device=device, rfb_inode=inode)
+            else:
+                ws_listener = workspace_ws_listener()
+                metadata["ws_port"] = ws_listener.getsockname()[1]
             os.environ["QT_QPA_PLATFORM"] = (
                 f"vncws:size=1280x800:fd={ws_listener.fileno()}")
             try:
@@ -247,7 +271,9 @@ def main() -> int:
         # signal, so SIGKILL of this supervisor cannot leave its desktop alive.
         for _name, child in reversed(children):
             stop(child)
-        if rfb.is_socket():
+        # qt-unix's path belongs to the manager, which retains its reservation
+        # until this supervisor and every child have finished.
+        if render_backend == "tiger" and rfb.is_socket():
             rfb.unlink()
         metadata.update(ready=False, ended_at=time.time(), exit_code=result)
         try:

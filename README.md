@@ -21,9 +21,10 @@ changes, window-manager/MDI choices, and reproduction checks.
 The [testing design memo](tests/README.md) explains scripted Qt widget interaction
 through noVNC, observation-based assertions, screenshot review, and check suites.
 
-## Transplant the Qt WebSocket plugin into your application
+## Transplant the Qt plugin into your application
 
-This optional path renders Qt Widgets directly over WebSocket without X11/Xvnc.
+This optional path renders Qt Widgets over WebSocket or a private Unix socket
+without X11/Xvnc.
 Use Linux raster widgets with **Qt 5.15**, and build against the **same Qt build
 and private development libraries as your application**. The plugin uses C++17;
 your application can keep C++23/GCC Toolset 15.
@@ -59,12 +60,30 @@ your application can keep C++23/GCC Toolset 15.
    [clipboard availability patch](tools/patch_novnc.py); an unpatched viewer
    still connects but does not display unavailable-copy feedback.
 4. For multiple authenticated users, let the supervisor reserve a separate
-   loopback listener per process/generation and pass its inherited descriptor as
+   Unix or loopback listener per process/generation and pass its inherited descriptor as
    `QT_QPA_PLATFORM=vncws:fd=N`. Keep the supervisor's reservation until locked
    generation teardown, coordinating viewer admission with that same lock.
    Authentication, TLS, identity-to-process routing and session lifetime belong
    to your proxy/supervisor; the plugin does not authenticate viewers. The
    infrastructure RPM and site configuration remain separate from the application.
+
+For a private Unix socket on Linux, create a directory owned by the application
+user with mode `0700`, then launch:
+
+```sh
+install -d -m 700 /run/client-app/session
+QT_PLUGIN_PATH=/opt/client-app/plugins \
+QT_QPA_PLATFORM=vncws:size=1280x800:socket=/run/client-app/session/rfb.sock \
+QT_FORCE_STDERR_LOGGING=1 /opt/client-app/bin/client-app
+```
+
+The socket has mode `0600` and carries **raw RFB**. The authenticated supervisor
+must bridge the browser's binary WebSocket to it; a browser cannot connect to a
+Unix socket directly. In this repository select `--render-backend qt-unix`
+(or CMake target `app-unix-up`); the manager supplies that bridge and retains the
+inherited listener until teardown. Qt opens no TCP listener in this mode.
+Filesystem permissions exclude other UIDs; processes sharing the service UID
+remain in the same trust boundary. See [ownership and cleanup](docs/integration/vncws.md#unix-socket-transport).
 
 The qualified application layout is MDI without an external window manager.
 Check your own dialogs, popups, focus, clipboard, resize, reconnect and takeover;

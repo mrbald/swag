@@ -60,6 +60,14 @@ async def main():
     ws_port = None
     if backend == 'tiger':
         server = await asyncio.start_unix_server(echo, path=str(runtime / 'rfb.sock'))
+    elif backend == 'qt-unix':
+        class InheritedListener(socket.socket):
+            def listen(self, backlog=16):
+                # Already listening in the manager. Re-listen would change
+                # Linux SO_PEERCRED, unlike the plugin's accept-only adoption.
+                pass
+        listener = InheritedListener(fileno=int(os.environ.pop('SWAG_QT_WS_LISTEN_FD')))
+        server = await asyncio.start_unix_server(echo, sock=listener)
     else:
         async def echo_ws(request):
             if (artifact / 'reject-websocket').exists():
@@ -87,8 +95,11 @@ async def main():
     metadata = {'ready': True, 'user': user, 'generation': generation,
                 'launcher_pid': pid, 'app_pid': pid, 'render_backend': backend,
                 'helpers': {'qt': pid}}
-    if backend == 'tiger':
+    if backend in ('tiger', 'qt-unix'):
         metadata['rfb_socket'] = str(runtime / 'rfb.sock')
+        if backend == 'qt-unix':
+            entry = (runtime / 'rfb.sock').lstat()
+            metadata.update(rfb_device=entry.st_dev, rfb_inode=entry.st_ino)
     else:
         metadata['ws_port'] = ws_port
     manifest.write_text(json.dumps(metadata))
@@ -677,6 +688,258 @@ class QtWsSessions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listener.fileno(), -1)
         self.assertTrue(viewer.upstream.closed)
         self.assertTrue(viewer.client_session.closed)
+
+
+class QtUnixSessions(unittest.IsolatedAsyncioTestCase):
+    headers = QtWsSessions.headers
+    start = QtWsSessions.start
+    artifacts = QtWsSessions.artifacts
+
+    async def asyncSetUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="swag-u-", dir="/tmp")
+        self.root = Path(self.temporary.name)
+        launcher = self.root / "fake.py"
+        launcher.write_text(FAKE_LAUNCHER)
+        self.config = Config(
+            proxy_key="private-proxy-key", public_origin="http://swag.test",
+            runtime=self.root / "r", artifacts=self.root / "a",
+            render_backend="qt-unix", lease_seconds=5, start_timeout=3,
+            launcher_command=(sys.executable, str(launcher)),
+        )
+        self.manager = SessionManager(self.config)
+        self.client = TestClient(TestServer(create_app(self.config, self.manager)))
+        await self.client.start_server()
+
+    async def asyncTearDown(self):
+        await self.client.close()
+        self.temporary.cleanup()
+
+    async def connect(self, session):
+        return await self.client.ws_connect(
+            f"/viewer/{session['generation']}/websockify",
+            headers=self.headers(), protocols=("binary",))
+
+    async def test_private_unix_relay_takeover_and_cleanup(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        path = workspace.unix_path
+        listener = workspace.ws_listener
+        metadata = json.loads((self.artifacts(session) / "launcher.json").read_text())
+        self.assertEqual(listener.family, socket.AF_UNIX)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual((metadata["rfb_device"], metadata["rfb_inode"]),
+                         (path.stat().st_dev, path.stat().st_ino))
+        self.assertNotIn("ws_port", metadata)
+        first = await self.connect(session)
+        self.assertEqual((await first.receive()).data, b"RFB hello")
+        await first.send_bytes(b"raw\x00RFB bytes")
+        self.assertEqual((await first.receive()).data, b"raw\x00RFB bytes")
+        second = await self.connect(session)
+        self.assertEqual((await second.receive()).data, b"RFB hello")
+        self.assertEqual((await first.receive(timeout=2)).type, WSMsgType.CLOSE)
+        await second.send_bytes(b"replacement viewer")
+        self.assertEqual((await second.receive()).data, b"replacement viewer")
+        await self.manager.end(workspace)
+        self.assertIn((await second.receive()).type, (WSMsgType.CLOSE, WSMsgType.CLOSED))
+        self.assertEqual(listener.fileno(), -1)
+        self.assertFalse(path.exists())
+        self.assertIsNotNone(workspace.process.returncode)
+
+    async def test_replaced_socket_is_rejected_and_never_unlinked(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        path = workspace.unix_path
+        old_identity = workspace.unix_identity
+        path.unlink()
+        with socket.socket(socket.AF_UNIX) as replacement:
+            replacement.bind(str(path))
+            path.chmod(0o600)
+            replacement.listen()
+            self.assertNotEqual((path.stat().st_dev, path.stat().st_ino), old_identity)
+            with self.assertRaises(WSServerHandshakeError) as denied:
+                await self.connect(session)
+            self.assertEqual(denied.exception.status, 404)
+            await self.manager.end(workspace)
+            self.assertTrue(path.is_socket())
+            self.assertEqual(workspace.state, "ended")
+
+    async def test_manifest_inode_or_path_cannot_redirect_viewer(self):
+        for mutate in (lambda m: {**m, "rfb_socket": "/tmp/other.sock"},
+                       lambda m: {**m, "rfb_inode": m["rfb_inode"] + 1},
+                       lambda m: {**m, "rfb_device": str(m["rfb_device"])}):
+            with self.subTest(mutate=mutate):
+                session = await self.start()
+                manifest = self.artifacts(session) / "launcher.json"
+                manifest.write_text(json.dumps(mutate(json.loads(manifest.read_text()))))
+                with self.assertRaises(WSServerHandshakeError) as denied:
+                    await self.connect(session)
+                self.assertEqual(denied.exception.status, 404)
+                self.assertIsNone(self.manager.workspace("alice").ws_listener)
+
+    async def test_path_replacement_during_dial_is_rejected(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        path = workspace.unix_path
+        original = asyncio.open_unix_connection
+        with socket.socket(socket.AF_UNIX) as replacement:
+            async def replaced_dial(*args, **kwargs):
+                path.unlink()
+                replacement.bind(str(path))
+                path.chmod(0o600)
+                replacement.listen()
+                return await original(*args, **kwargs)
+            with patch.object(asyncio, "open_unix_connection", replaced_dial):
+                with self.assertRaises(WSServerHandshakeError) as denied:
+                    await self.connect(session)
+                self.assertEqual(denied.exception.status, 503)
+            await self.manager.end(workspace)
+            self.assertTrue(path.is_socket())
+
+    async def test_cleanup_retains_reservation_until_child_reaped_even_when_cancelled(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        listener, path = workspace.ws_listener, workspace.unix_path
+        entered, resume = asyncio.Event(), asyncio.Event()
+        original = self.manager._stop
+
+        async def delayed_stop(process):
+            entered.set()
+            await resume.wait()
+            await original(process)
+
+        with patch.object(self.manager, "_stop", delayed_stop):
+            ending = asyncio.create_task(self.manager.end(workspace))
+            await asyncio.wait_for(entered.wait(), 2)
+            for _ in range(2):
+                ending.cancel()
+                await asyncio.sleep(.02)
+                self.assertFalse(ending.done())
+                self.assertGreaterEqual(listener.fileno(), 0)
+                self.assertTrue(path.is_socket())
+                self.assertTrue(workspace.lock.locked())
+            resume.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await ending
+        self.assertEqual(listener.fileno(), -1)
+        self.assertFalse(path.exists())
+        self.assertIsNotNone(workspace.process.returncode)
+
+    async def test_cancelled_invalid_manifest_refresh_finishes_teardown_under_lock(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        listener, path = workspace.ws_listener, workspace.unix_path
+        entered, resume = asyncio.Event(), asyncio.Event()
+        original_stop = self.manager._stop
+
+        async def delayed_stop(process):
+            entered.set()
+            await resume.wait()
+            await original_stop(process)
+
+        async def refresh_invalid_manifest():
+            async with workspace.lock:
+                (self.artifacts(session) / "launcher.json").write_text("{}")
+                await self.manager._refresh(workspace)
+
+        with patch.object(self.manager, "_stop", delayed_stop):
+            refreshing = asyncio.create_task(refresh_invalid_manifest())
+            await asyncio.wait_for(entered.wait(), 2)
+            for _ in range(2):
+                refreshing.cancel()
+                await asyncio.sleep(.02)
+                self.assertFalse(refreshing.done())
+                self.assertTrue(workspace.lock.locked())
+                self.assertGreaterEqual(listener.fileno(), 0)
+                self.assertTrue(path.is_socket())
+            resume.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await refreshing
+        self.assertEqual(workspace.state, "ended")
+        self.assertIsNotNone(workspace.process.returncode)
+        self.assertEqual(listener.fileno(), -1)
+        self.assertFalse(path.exists())
+        self.assertFalse(workspace.lock.locked())
+
+    async def test_failed_start_and_timeout_remove_only_owned_reservations(self):
+        workspace = self.manager.workspace("alice")
+        for command in ((sys.executable, "-c", "raise SystemExit(7)"),
+                        (sys.executable, "-c", "import time; time.sleep(60)")):
+            self.manager.config = replace(self.config, start_timeout=.15,
+                                          launcher_command=command)
+            with self.assertRaises(SessionError) as failed:
+                await self.manager.start(workspace)
+            self.assertEqual(failed.exception.status, 503)
+            runtime, _ = self.manager.launch_paths(workspace)
+            self.assertFalse((runtime / "rfb.sock").exists())
+            self.assertIsNone(workspace.ws_listener)
+            self.assertIsNone(workspace.unix_identity)
+            self.assertIsNotNone(workspace.process.returncode)
+
+    async def test_cancelled_spawn_retains_socket_until_child_is_collected(self):
+        self.manager.config = replace(self.config, launcher_command=(
+            sys.executable, "-c", "import time; time.sleep(60)"))
+        workspace = self.manager.workspace("alice")
+        original_spawn = asyncio.create_subprocess_exec
+        entered, resume = asyncio.Event(), asyncio.Event()
+        children = []
+
+        async def delayed_spawn(*args, **kwargs):
+            children.append(await original_spawn(*args, **kwargs))
+            entered.set()
+            await resume.wait()
+            return children[-1]
+
+        with patch.object(asyncio, "create_subprocess_exec", delayed_spawn):
+            starting = asyncio.create_task(self.manager.start(workspace))
+            await asyncio.wait_for(entered.wait(), 2)
+            listener, path = workspace.ws_listener, workspace.unix_path
+            for _ in range(2):
+                starting.cancel()
+                await asyncio.sleep(.02)
+                self.assertFalse(starting.done())
+                self.assertGreaterEqual(listener.fileno(), 0)
+                self.assertTrue(path.is_socket())
+                self.assertTrue(workspace.lock.locked())
+            resume.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await starting
+        self.assertIsNotNone(children[0].returncode)
+        self.assertEqual(listener.fileno(), -1)
+        self.assertFalse(path.exists())
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux SO_PEERCRED admission")
+    async def test_peer_credentials_reject_foreign_process_even_with_valid_manifest(self):
+        session = await self.start()
+        foreign_path = self.root / "foreign.sock"
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-c",
+            "import socket,sys,time; s=socket.socket(socket.AF_UNIX); "
+            "s.bind(sys.argv[1]); s.listen(); print('ready',flush=True); time.sleep(60)",
+            str(foreign_path), stdout=asyncio.subprocess.PIPE)
+        try:
+            self.assertEqual(await asyncio.wait_for(process.stdout.readline(), 2), b"ready\n")
+            original = asyncio.open_unix_connection
+
+            async def redirected_dial(*_args, **kwargs):
+                return await original(str(foreign_path), **kwargs)
+
+            with patch.object(asyncio, "open_unix_connection", redirected_dial):
+                with self.assertRaises(WSServerHandshakeError) as denied:
+                    await self.connect(session)
+                self.assertEqual(denied.exception.status, 503)
+        finally:
+            process.terminate()
+            await process.wait()
+
+    async def test_insecure_socket_mode_revokes_ready_endpoint(self):
+        session = await self.start()
+        workspace = self.manager.workspace("alice")
+        workspace.unix_path.chmod(0o666)
+        with self.assertRaises(WSServerHandshakeError) as denied:
+            await self.connect(session)
+        self.assertEqual(denied.exception.status, 404)
+        self.assertIsNone(workspace.ws_listener)
 
 
 class ViewerCleanup(unittest.IsolatedAsyncioTestCase):

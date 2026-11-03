@@ -36,7 +36,9 @@ design; this implementation proves a single host.
 The selected renderer is **TigerVNC**, using Qt's `xcb` platform plugin. The tested
 Qt 5.15.3 VNC plugin passed 9/13 interaction checks but failed wheel input,
 non-Latin-1 keys and both clipboard directions. TigerVNC passed 13/13 over TCP
-and Unix sockets. Qt VNC Unix-socket support was neither patched nor qualified.
+and Unix sockets. These results concern the packaged Qt VNC plugin.
+The separately built `vncws` plugin now supports direct WebSocket and private
+Unix socket transports without X11; see the [plugin integration guide](vncws.md).
 These findings concern the tested package; see the [rendering decision](../decisions/rendering.md).
 This setup retains internal X11 and needs no host X server or mounted host X socket.
 

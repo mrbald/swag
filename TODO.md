@@ -54,5 +54,5 @@ Root maintains this checklist. No separate task system.
 - [x] Qualify the installed probe/plugin in a clean runtime-only EL8 image; verify packages/libraries/hashes and 4 real browser checks, document dependencies, commit/push.
 
 - [x] Add bounded Unix RFB plugin transport, safe pathname/inherited-FD ownership and native acceptance; commit/push.
-- [ ] Integrate qt-unix manager/launcher and tools, verify lifetime/admission/cleanup and browser regressions; commit/push.
+- [x] Integrate qt-unix manager/launcher and tools, verify lifetime/admission/cleanup and browser regressions; commit/push.
 - [ ] Qualify integrated Unix transport, record limits and restore the demo using the safer mode.

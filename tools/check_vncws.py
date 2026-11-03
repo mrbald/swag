@@ -44,14 +44,14 @@ def command(name: str, args: argparse.Namespace, output: Path) -> list[str]:
         result += ['--engine', args.engine]
     if kind in ('wire', 'probe', 'fixed-probe'):
         result += ['--port', str(args.port)]
-    if kind == 'probe':
-        result += ['--backend', 'qt-ws']
+    if kind in ('wire', 'probe', 'fixed-probe'):
+        result += ['--backend', args.backend]
     if name == 'smoke':
         result += ['--browser-channel', 'chrome']
     if kind.startswith('app'):
         result += ['--origin', args.origin]
         if kind != 'app-clipboard':
-            result += ['--render-backend', 'qt-ws']
+            result += ['--render-backend', args.backend]
     return result
 
 
@@ -79,7 +79,7 @@ def run(args: argparse.Namespace, names: list[str]) -> tuple[int, dict]:
     output = args.output.resolve() / run_name
     output.mkdir(parents=True, exist_ok=False)
     summary = {'schema_version': 1, 'status': 'running', 'output': str(output),
-               'engine': args.engine, 'port': args.port, 'origin': args.origin,
+               'engine': args.engine, 'backend': args.backend, 'port': args.port, 'origin': args.origin,
                'selected_suites': names, 'suites': []}
     summary_path = output / 'summary.json'
     write_summary(summary_path, summary)
@@ -137,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--list', action='store_true', help='List available suites as JSON; do not run')
     parser.add_argument('--suite', action='append', choices=SUITES,
                         help='Select a suite; repeat to select several (canonical order)')
+    parser.add_argument('--backend', choices=('qt-ws', 'qt-unix'), default='qt-ws')
     parser.add_argument('--engine', default='podman')
     parser.add_argument('--port', type=int, default=6300,
                         help='Isolated probe HTTP port; the following port is its WebSocket port')

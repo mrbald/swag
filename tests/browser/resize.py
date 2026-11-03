@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--origin", default="http://localhost:6081")
     parser.add_argument("--output", type=Path)
-    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger")
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws", "qt-unix"), default="tiger")
     args = parser.parse_args()
     results, current = [], "initial_connect_fills_canvas"
     output = args.output or ROOT / "artifacts/resize-check"
@@ -111,7 +111,7 @@ def main():
             actor.screenshot("resized-desktop")
             passed(sizes=measured, frame_count=len(original_forms), same_process=True)
 
-            if args.render_backend == 'qt-ws':
+            if args.render_backend in {'qt-ws', 'qt-unix'}:
                 current = 'ultrawide_native_and_scaled_fallback'
                 page = actor.page
                 page.set_viewport_size({'width':3440, 'height':1440})
@@ -162,7 +162,7 @@ def main():
             passed(framebuffer=fitted(), same_process=True)
             retained()
 
-            if args.render_backend == "qt-ws":
+            if args.render_backend in {"qt-ws", "qt-unix"}:
                 current = "formerly_oversize_desktop_now_native"
                 actor.page.set_viewport_size({"width":2400,"height":1200})
                 assert fitted() == [2400,1164]

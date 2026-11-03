@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", default="podman")
     parser.add_argument("--origin", default="http://localhost:6081")
-    parser.add_argument("--render-backend", choices=("tiger", "qt-ws"), default="tiger")
+    parser.add_argument("--render-backend", choices=("tiger", "qt-ws", "qt-unix"), default="tiger")
     parser.add_argument("--output", type=Path, default=OUTPUT)
     args = parser.parse_args()
     OUTPUT = args.output.resolve()
@@ -88,7 +88,7 @@ def main():
             assert "openbox" not in launcher["helpers"]
             processes = suite.command("exec", "swag-host", "ps", "-eo", "comm").stdout.splitlines()
             assert "openbox" not in [s.strip() for s in processes]
-            if args.render_backend == "qt-ws":
+            if args.render_backend in {"qt-ws", "qt-unix"}:
                 assert set(launcher["helpers"]) == {"qt"}, launcher
                 assert not {"Xvnc", "vncconfig", "websockify"}.intersection(s.strip() for s in processes)
                 workspace.wait_for(lambda: actor.framebuffer_size() == actor.page.locator("#screen").evaluate(

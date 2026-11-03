@@ -10,6 +10,7 @@ import re
 import secrets
 import signal
 import socket
+import struct
 import sys
 import time
 from urllib.parse import urlsplit
@@ -17,7 +18,8 @@ import uuid
 
 from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMsgType, web
 
-from .processes import QT_WS_LISTEN_FD, exclusive_lock, reserve_ws_listener
+from .processes import (QT_WS_LISTEN_FD, exclusive_lock, reserve_ws_listener,
+                        reserve_unix_listener, unix_socket_identity, unlink_owned_socket)
 
 
 @dataclass(frozen=True)
@@ -41,8 +43,8 @@ class Config:
             raise ValueError("configure a proxy key and exact http(s) browser origin")
         if not 0 < self.lease_seconds <= 3600 or not 0 < self.start_timeout <= 300:
             raise ValueError("invalid session timeout")
-        if self.render_backend not in {"tiger", "qt-ws"}:
-            raise ValueError("render backend must be tiger or qt-ws")
+        if self.render_backend not in {"tiger", "qt-ws", "qt-unix"}:
+            raise ValueError("render backend must be tiger, qt-ws or qt-unix")
 
     @classmethod
     def from_env(cls) -> Config:
@@ -110,6 +112,8 @@ class Workspace:
     monitor: asyncio.Task[None] | None = None
     viewer: Viewer | None = None
     ws_listener: socket.socket | None = field(default=None, repr=False)
+    unix_path: Path | None = field(default=None, repr=False)
+    unix_identity: tuple[int, int] | None = field(default=None, repr=False)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def snapshot(self) -> dict[str, object]:
@@ -145,7 +149,7 @@ class SessionManager:
 
     def _validated_endpoint(self, workspace: Workspace,
                             metadata: object, runtime: Path) -> int | None:
-        """Return 0 for Tiger, a Qt WS port, or None for a stale/invalid manifest."""
+        """Return 0 for Unix RFB, a Qt WS port, or None for an invalid manifest."""
         if not isinstance(metadata, dict):
             return None
         process = workspace.process
@@ -167,6 +171,23 @@ class SessionManager:
             if metadata.get("rfb_socket") != str(rfb) or not rfb.is_socket():
                 return None
             return 0
+        if self.config.render_backend == "qt-unix":
+            path = runtime / "rfb.sock"
+            listener = workspace.ws_listener
+            if (listener is None or listener.family != socket.AF_UNIX
+                    or workspace.unix_path != path or workspace.unix_identity is None
+                    or metadata.get("rfb_socket") != str(path)
+                    or type(metadata.get("rfb_device")) is not int
+                    or type(metadata.get("rfb_inode")) is not int
+                    or (metadata["rfb_device"], metadata["rfb_inode"]) != workspace.unix_identity):
+                return None
+            try:
+                if (listener.getsockname() != str(path)
+                        or unix_socket_identity(path) != workspace.unix_identity):
+                    return None
+            except (OSError, ValueError):
+                return None
+            return 0
         port = metadata.get("ws_port")
         if type(port) is not int or workspace.ws_listener is None:
             return None
@@ -181,16 +202,40 @@ class SessionManager:
         # Callers hold workspace.lock, including admission through ws_connect.
         # A dead renderer cannot free this generation's port for another owner
         # between endpoint validation and the viewer's connect.
-        workspace.state = "ended"
-        workspace.pid = None
-        viewer, workspace.viewer = workspace.viewer, None
-        try:
-            if viewer:
-                await viewer.close()
-        finally:
-            if workspace.ws_listener is not None:
-                workspace.ws_listener.close()
-                workspace.ws_listener = None
+        async def cleanup() -> None:
+            workspace.state = "ended"
+            workspace.pid = None
+            viewer, workspace.viewer = workspace.viewer, None
+            try:
+                if viewer:
+                    await viewer.close()
+            finally:
+                # A local socket pathname belongs to this generation until its
+                # acceptor is stopped, even when readiness is revoked early.
+                if self.config.render_backend == "qt-unix" and workspace.process is not None:
+                    await self._stop(workspace.process)
+                if workspace.ws_listener is not None:
+                    workspace.ws_listener.close()
+                    workspace.ws_listener = None
+                if workspace.unix_path is not None and workspace.unix_identity is not None:
+                    unlink_owned_socket(workspace.unix_path, workspace.unix_identity)
+                workspace.unix_path = None
+                workspace.unix_identity = None
+
+        ending = asyncio.create_task(cleanup())
+        cancelled = False
+        while True:
+            try:
+                await asyncio.shield(ending)
+                break
+            except asyncio.CancelledError:
+                if ending.cancelled():
+                    raise
+                # Refresh also ends invalid generations. Its request must not
+                # release the lock with an ended-but-live child and reservation.
+                cancelled = True
+        if cancelled:
+            raise asyncio.CancelledError
 
     async def _refresh(self, workspace: Workspace) -> None:
         if (workspace.process is not None and workspace.process.returncode is not None
@@ -270,8 +315,13 @@ class SessionManager:
                     "SWAG_RENDER_BACKEND": self.config.render_backend,
                 })
                 pass_fds: tuple[int, ...] = ()
-                if self.config.render_backend == "qt-ws":
-                    workspace.ws_listener = reserve_ws_listener()
+                if self.config.render_backend in {"qt-ws", "qt-unix"}:
+                    if self.config.render_backend == "qt-unix":
+                        workspace.unix_path = runtime / "rfb.sock"
+                        workspace.ws_listener = reserve_unix_listener(workspace.unix_path)
+                        workspace.unix_identity = unix_socket_identity(workspace.unix_path)
+                    else:
+                        workspace.ws_listener = reserve_ws_listener()
                     descriptor = workspace.ws_listener.fileno()
                     environment[QT_WS_LISTEN_FD] = str(descriptor)
                     pass_fds = (descriptor,)
@@ -386,6 +436,19 @@ class SessionManager:
                     reader, writer = await asyncio.wait_for(
                         asyncio.open_unix_connection(str(runtime / "rfb.sock"), limit=65536), 3,
                     )
+                    if self.config.render_backend == "qt-unix":
+                        # Path identity must still match after the asynchronous
+                        # dial. Linux also pins the listener creator's credentials
+                        # in the connected socket to reject a foreign process.
+                        if self._validated_endpoint(workspace, metadata, runtime) != 0:
+                            raise OSError("Unix renderer endpoint changed during connect")
+                        if sys.platform == "linux":
+                            connected = writer.get_extra_info("socket")
+                            credentials = connected.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
+                                                              struct.calcsize("3i"))
+                            pid, uid, _gid = struct.unpack("3i", credentials)
+                            if pid != os.getpid() or uid != os.geteuid():
+                                raise OSError("Unix renderer listener owner changed")
                 else:
                     client_session = ClientSession()
                     upstream = await asyncio.wait_for(
@@ -394,6 +457,8 @@ class SessionManager:
                                                   compress=0), 3,
                     )
             except BaseException as error:
+                if writer is not None:
+                    writer.close()
                 if client_session is not None:
                     await asyncio.shield(client_session.close())
                 if isinstance(error, asyncio.CancelledError):
