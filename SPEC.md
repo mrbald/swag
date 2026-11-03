@@ -209,3 +209,7 @@ Approved documentation follow-up: organize integration by reader task; provide
 complete local viewer and inherited-FD examples, distinguish plugin-only loading
 from supervised application contracts, and separate historical qualification.
 Verify runnable recipes, peer-review, then commit/push.
+
+Approved noVNC packaging follow-up: track the clipboard change as a conventional
+unified patch against pinned, non-minified upstream source. Keep checksum guards,
+document manual application, and verify identical viewer output before commit/push.

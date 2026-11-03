@@ -79,7 +79,7 @@ viewer. These are **unauthenticated, loopback-only local checks**; use the
 [session-stack recipe](#reuse-the-session-stack) for authenticated workspaces.
 
 From this repository root, on the Linux application host, install Python 3.12 with venv/pip,
-`curl`, `tar` and `sha256sum`. Fetch the exact noVNC release used by our images:
+`curl`, `tar`, `patch` and `sha256sum`. Fetch the exact noVNC release used by our images:
 
 ```sh
 (
@@ -95,7 +95,13 @@ From this repository root, on the Linux application host, install Python 3.12 wi
 )
 ```
 
-Extract a fresh upstream tree before reapplying the patch: it deliberately rejects
+The upstream JavaScript is readable, non-minified ES modules; no bundling or npm
+build is needed. Our [tracked unified patch](../../patches/novnc/0001-clipboard-unavailable.patch)
+is applied by the standard `patch` tool through a checksum-checking wrapper.
+[Patch maintenance and manual application](../../patches/novnc/README.md) describe
+the exact inputs and expected output.
+
+Extract a fresh upstream tree before reapplying the patch: the wrapper deliberately rejects
 an already-patched or different `rfb.js`. The page and `clipboard.js` are both
 needed for clipboard limits and unavailable-copy feedback. Copy the resulting
 viewer directory to your local test host if preparing it elsewhere. An embedded

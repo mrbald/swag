@@ -1,0 +1,16 @@
+--- a/core/rfb.js
++++ b/core/rfb.js
+@@ -2421,6 +2421,13 @@
+                     return true;
+                 }
+ 
++                // SWAG: surface standard notification that no text is available.
++                // Do not leave a previous remote or local copy looking current.
++                if (!(formats & extendedClipboardFormatText)) {
++                    this._clipboardText = null;
++                    this.dispatchEvent(new CustomEvent("clipboardunavailable"));
++                }
++
+                 if (this._clipboardServerCapabilitiesActions[extendedClipboardActionRequest]) {
+ 
+                     if (formats & extendedClipboardFormatText) {

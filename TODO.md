@@ -58,3 +58,4 @@ Root maintains this checklist. No separate task system.
 - [x] Qualify integrated Unix transport, record limits and restore the demo using the safer mode.
 
 - [x] Reorganize integration recipes and qualification history; verify viewer/FD examples, peer-review and commit/push.
+- [x] Track and conventionally apply the noVNC clipboard patch; verify unchanged output and failure guards, peer-review and commit/push.

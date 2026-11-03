@@ -14,7 +14,7 @@ RUN dnf -y install epel-release dnf-plugins-core \
        python3.12 python3.12-pip \
        tigervnc-server-minimal openbox xorg-x11-utils \
        dejavu-sans-fonts google-noto-sans-cjk-jp-fonts \
-       fontconfig procps-ng iproute curl tar \
+       fontconfig procps-ng iproute curl tar patch \
     && dnf clean all \
     && rm -rf /var/cache/dnf
 
@@ -35,9 +35,10 @@ RUN curl --fail --location --silent --show-error \
     && python3.12 -m pip install --no-cache-dir --no-deps "/tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl" \
     && rm /tmp/novnc.tar.gz "/tmp/websockify-${WEBSOCKIFY_VERSION}-py3-none-any.whl"
 
-COPY tools/patch_novnc.py /tmp/patch_novnc.py
-RUN python3.12 /tmp/patch_novnc.py /opt/novnc/core/rfb.js \
-    && rm /tmp/patch_novnc.py
+COPY tools/patch_novnc.py /tmp/swag-novnc/tools/patch_novnc.py
+COPY patches/novnc/0001-clipboard-unavailable.patch /tmp/swag-novnc/patches/novnc/0001-clipboard-unavailable.patch
+RUN python3.12 /tmp/swag-novnc/tools/patch_novnc.py /opt/novnc/core/rfb.js \
+    && rm -rf /tmp/swag-novnc
 
 RUN groupadd --gid 1000 swag \
     && useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash swag \
