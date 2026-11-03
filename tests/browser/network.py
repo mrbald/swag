@@ -38,6 +38,7 @@ BLUE_PIXEL = """({x,y}) => {
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--render-backend', choices=('qt-ws', 'qt-unix'), default='qt-ws')
     parser.add_argument('--engine',default='podman')
     parser.add_argument('--origin',default='http://localhost:6081')
     parser.add_argument('--output',type=Path,default=ROOT/'artifacts/qt-ws-network')
@@ -64,7 +65,7 @@ def main():
     marker=b'set $session_backend swag-host:8080;'
     assert original.count(marker)==1, 'unexpected nginx upstream configuration'
     settings=json.loads((workspace.STACK/'public.json').read_text())
-    assert settings['origin']==args.origin and settings['render_backend']=='qt-ws'
+    assert settings['origin']==args.origin and settings['render_backend']==args.render_backend
     name='swag-network-profile'
     results=[]
     changed=started=False

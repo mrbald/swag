@@ -8,7 +8,8 @@ its own; no SWAG application source or GCC 15 toolchain is needed.
 On AlmaLinux 8, install `cmake`, a C++17 compiler, `pkgconf-pkg-config`,
 `qt5-qtbase-devel`, `qt5-qtbase-private-devel`, `qt5-qtbase-static`,
 `qt5-qtwebsockets-devel`, `libxkbcommon-devel`, and `zlib-devel`. Build against the same
-Qt packages used by the host application:
+Qt packages used by the host application. QtNetwork must include `QLocalSocket`
+(the `localserver` feature), also when selecting TCP at runtime:
 
 ```sh
 cp -a src/plugins/vncws /tmp/vncws
@@ -55,13 +56,13 @@ can clear stale text and display an explanation; a later valid copy clears it.
 Unpatched noVNC ignores that notification. Legacy viewers cannot report this
 availability state and retain the previous silent-omission behavior.
 
-For standalone Linux Unix-socket mode, create a private directory owned by the
-application UID and select `socket=` instead of `port=`:
+For standalone Linux Unix-socket mode, provision `/run/client-app` for the
+application UID with mode `0700`, then create a fresh private directory per start:
 
 ```sh
-install -d -m 0700 /run/client-app
+session_dir=$(mktemp -d /run/client-app/session.XXXXXX)
 QT_PLUGIN_PATH=/opt/vncws/plugins \
-  QT_QPA_PLATFORM=vncws:size=1280x800:socket=/run/client-app/rfb.sock \
+  QT_QPA_PLATFORM="vncws:size=1280x800:socket=$session_dir/rfb.sock" \
   /path/to/qt5-application
 ```
 
@@ -74,8 +75,13 @@ absolute, canonical, shorter than 108 encoded bytes and contain neither `:` nor
 are rejected. `socket` is mutually exclusive with `addr`, `port` and `fd`.
 
 An occupied pathname is never removed, including a stale socket after a crash.
-For standalone mode, orderly shutdown removes only the socket inode created by
-this process. A supervisor using `fd=N` owns pathname creation and cleanup: the
+Standalone cleanup requires normal Qt application teardown (including destruction
+of the QGuiApplication/QApplication). SIGTERM with its default action, SIGKILL,
+`_exit` and crashes bypass that cleanup. Restarting on the same occupied path
+fails safely. Use a fresh private generation directory per start, and have the
+supervisor clean its own abandoned generation only after the process is dead.
+The plugin does not install signal handlers in the client application.
+A supervisor using `fd=N` owns pathname creation and cleanup: the
 plugin closes its descriptor but never unlinks the inherited pathname. The
 inherited socket and parent must have the same ownership/modes described above.
 Keep listener reservation and generation cleanup under supervisor control.

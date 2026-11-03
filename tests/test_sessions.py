@@ -13,10 +13,12 @@ import os
 from pathlib import Path
 import signal
 import socket
+import struct
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from aiohttp import WSMsgType, WSServerHandshakeError
 from aiohttp.test_utils import TestClient, TestServer
@@ -690,19 +692,76 @@ class QtWsSessions(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(viewer.client_session.closed)
 
 
+class QtUnixConfig(unittest.TestCase):
+    def config(self, runtime, backend="qt-unix"):
+        return Config(proxy_key="private", public_origin="http://swag.test",
+                      runtime=runtime, render_backend=backend)
+
+    def test_canonical_short_runtime_is_accepted_before_it_exists(self):
+        parent = Path("/tmp").resolve()
+        limit = 103 if sys.platform == "darwin" else 107
+        available = limit - 81 - len(os.fsencode(parent)) - 1
+        boundary = parent / ("x" * available)
+        self.assertEqual(len(os.fsencode(boundary)) + 81, limit)
+        longest_socket = boundary / "users" / ("u" * 32) / ("a" * 32) / "rfb.sock"
+        self.assertEqual(len(os.fsencode(longest_socket)), limit)
+        self.assertEqual(self.config(boundary).runtime, boundary)
+        with self.assertRaisesRegex(ValueError, "qt-unix runtime"):
+            self.config(boundary.with_name(boundary.name + "x"))
+        # The socket limit counts encoded bytes, not Unicode characters.
+        with self.assertRaisesRegex(ValueError, "qt-unix runtime"):
+            self.config(boundary.with_name(boundary.name[:-1] + "é"))
+
+    def test_relative_noncanonical_and_parameter_separator_roots_are_rejected(self):
+        for path in (Path("relative"), Path("/x/../y"), Path("/x:y"),
+                     Path("/x=y"), Path("/x\0y")):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, "qt-unix runtime"):
+                self.config(path)
+
+    def test_symlinked_runtime_is_rejected_even_when_short_and_private(self):
+        with tempfile.TemporaryDirectory(prefix="", dir="/tmp") as target, \
+                tempfile.TemporaryDirectory(prefix="", dir="/tmp") as temporary:
+            link = Path(temporary).parent.resolve() / Path(temporary).name
+            link.rmdir()
+            link.symlink_to(Path(target).resolve(), target_is_directory=True)
+            try:
+                with self.assertRaisesRegex(ValueError, "qt-unix runtime"):
+                    self.config(link)
+            finally:
+                link.unlink()
+                link.mkdir(mode=0o700)
+
+    def test_other_backends_keep_existing_runtime_path_policy(self):
+        for backend in ("tiger", "qt-ws"):
+            self.assertEqual(self.config(Path("relative:root"), backend).runtime,
+                             Path("relative:root"))
+
+    def test_runtime_symlink_cycle_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="", dir="/tmp") as temporary:
+            link = Path(temporary).resolve()
+            link.rmdir()
+            link.symlink_to(link.name, target_is_directory=True)
+            try:
+                with self.assertRaisesRegex(ValueError, "qt-unix runtime"):
+                    self.config(link)
+            finally:
+                link.unlink()
+                link.mkdir(mode=0o700)
+
+
 class QtUnixSessions(unittest.IsolatedAsyncioTestCase):
     headers = QtWsSessions.headers
     start = QtWsSessions.start
     artifacts = QtWsSessions.artifacts
 
     async def asyncSetUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="swag-u-", dir="/tmp")
-        self.root = Path(self.temporary.name)
+        self.temporary = tempfile.TemporaryDirectory(prefix="", dir="/tmp")
+        self.root = Path(self.temporary.name).resolve()
         launcher = self.root / "fake.py"
         launcher.write_text(FAKE_LAUNCHER)
         self.config = Config(
             proxy_key="private-proxy-key", public_origin="http://swag.test",
-            runtime=self.root / "r", artifacts=self.root / "a",
+            runtime=self.root, artifacts=self.root / "a",
             render_backend="qt-unix", lease_seconds=5, start_timeout=3,
             launcher_command=(sys.executable, str(launcher)),
         )
@@ -745,6 +804,46 @@ class QtUnixSessions(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(listener.fileno(), -1)
         self.assertFalse(path.exists())
         self.assertIsNotNone(workspace.process.returncode)
+
+    async def check_unsigned_peer_uid(self, peer_uid):
+        session = await self.start()
+        service_uid = 2**31 + 7
+        credentials = struct.pack("iII", os.getpid(), peer_uid, 2**31 + 9)
+        connected = Mock()
+        connected.getsockopt.return_value = credentials
+        original = asyncio.open_unix_connection
+
+        async def connected_with_credentials(*args, **kwargs):
+            reader, writer = await original(*args, **kwargs)
+            get_extra_info = writer.get_extra_info
+            writer.get_extra_info = lambda name, default=None: (
+                connected if name == "socket" else get_extra_info(name, default))
+            return reader, writer
+
+        # Only the peer-credential boundary sees the simulated service UID.
+        # Filesystem ownership checks continue to validate real temporary files.
+        with patch.object(asyncio, "open_unix_connection", connected_with_credentials), \
+                patch.object(session_server, "os", SimpleNamespace(
+                    getpid=os.getpid, geteuid=lambda: service_uid)), \
+                patch.object(session_server, "sys", SimpleNamespace(platform="linux")), \
+                patch.object(socket, "SO_PEERCRED", getattr(socket, "SO_PEERCRED", 17), create=True):
+            if peer_uid == service_uid:
+                viewer = await self.connect(session)
+                self.assertEqual((await viewer.receive()).data, b"RFB hello")
+                await viewer.send_bytes(b"unsigned uid admitted")
+                self.assertEqual((await viewer.receive()).data, b"unsigned uid admitted")
+                await viewer.close()
+            else:
+                with self.assertRaises(WSServerHandshakeError) as denied:
+                    await self.connect(session)
+                self.assertEqual(denied.exception.status, 503)
+            connected.getsockopt.assert_called_once_with(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+
+    async def test_unsigned_high_peer_uid_is_admitted(self):
+        await self.check_unsigned_peer_uid(2**31 + 7)
+
+    async def test_unsigned_high_peer_uid_mismatch_is_rejected(self):
+        await self.check_unsigned_peer_uid(2**31 + 8)
 
     async def test_replaced_socket_is_rejected_and_never_unlinked(self):
         session = await self.start()

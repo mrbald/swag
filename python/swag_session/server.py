@@ -19,7 +19,8 @@ import uuid
 from aiohttp import ClientError, ClientSession, ClientWebSocketResponse, WSMsgType, web
 
 from .processes import (QT_WS_LISTEN_FD, exclusive_lock, reserve_ws_listener,
-                        reserve_unix_listener, unix_socket_identity, unlink_owned_socket)
+                        reserve_unix_listener, unix_socket_identity, unlink_owned_socket,
+                        validate_unix_path)
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,13 @@ class Config:
             raise ValueError("invalid session timeout")
         if self.render_backend not in {"tiger", "qt-ws", "qt-unix"}:
             raise ValueError("render backend must be tiger, qt-ws or qt-unix")
+        if self.render_backend == "qt-unix":
+            # /users/<32-byte username>/<32-byte generation>/rfb.sock adds 81
+            # bytes. Reject roots that cannot serve every valid user at startup.
+            try:
+                validate_unix_path(self.runtime, suffix_bytes=81)
+            except ValueError as error:
+                raise ValueError(f"invalid qt-unix runtime directory: {error}") from error
 
     @classmethod
     def from_env(cls) -> Config:
@@ -445,8 +453,8 @@ class SessionManager:
                         if sys.platform == "linux":
                             connected = writer.get_extra_info("socket")
                             credentials = connected.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED,
-                                                              struct.calcsize("3i"))
-                            pid, uid, _gid = struct.unpack("3i", credentials)
+                                                              struct.calcsize("iII"))
+                            pid, uid, _gid = struct.unpack("iII", credentials)
                             if pid != os.getpid() or uid != os.geteuid():
                                 raise OSError("Unix renderer listener owner changed")
                 else:

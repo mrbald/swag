@@ -12,7 +12,7 @@ from swag_session.processes import reserve_unix_listener, unix_socket_identity, 
 class UnixListener(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="swag-sock-", dir="/tmp")
-        self.root = Path(self.temporary.name)
+        self.root = Path(self.temporary.name).resolve()
         self.path = self.root / "rfb.sock"
 
     def tearDown(self):
@@ -40,7 +40,7 @@ class UnixListener(unittest.TestCase):
         target = self.root / "target"
         target.write_text("foreign target")
         self.path.symlink_to(target)
-        with self.assertRaises(OSError):
+        with self.assertRaises(ValueError):
             reserve_unix_listener(self.path)
         self.assertTrue(self.path.is_symlink())
         self.assertEqual(target.read_text(), "foreign target")
@@ -66,9 +66,19 @@ class UnixListener(unittest.TestCase):
             reserve_unix_listener(link / "rfb.sock")
 
     def test_malformed_paths_are_rejected_before_bind(self):
-        for path in (Path("relative.sock"), Path("/tmp/with\0nul"), self.root / ("x" * 108)):
+        for path in (Path("relative.sock"), Path("/tmp/with\0nul"), self.root / ("x" * 108),
+                     self.root / "with:colon.sock", self.root / "with=equals.sock"):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 reserve_unix_listener(path)
+
+    def test_symlink_in_ancestor_is_rejected(self):
+        real = self.root / "real"
+        (real / "private").mkdir(parents=True, mode=0o700)
+        link = self.root / "link"
+        link.symlink_to(real, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            reserve_unix_listener(link / "private" / "rfb.sock")
+        self.assertFalse((real / "private" / "rfb.sock").exists())
 
     def test_identity_and_cleanup_do_not_follow_replacement_symlink(self):
         with reserve_unix_listener(self.path):

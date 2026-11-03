@@ -48,6 +48,7 @@ class SoakActor(workspace.Actor):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--render-backend', choices=('qt-ws', 'qt-unix'), default='qt-ws')
     parser.add_argument('--origin', default='http://localhost:6081')
     parser.add_argument('--engine', default='podman')
     parser.add_argument('--seconds', type=int, default=1800)
@@ -64,13 +65,13 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     workspace.OUTPUT = output
-    suite = workspace.Suite(args.engine, args.origin, 'qt-ws')
+    suite = workspace.Suite(args.engine, args.origin, args.render_backend)
     result = dict(status='running', requested_seconds=args.seconds, interval=args.interval,
                   users=['alice', 'bob'], cycles=[], resources=[], unexpected_closes=[],
                   browser_errors=[], limits='Two live users with alternating real input; local HTTP/Chrome. '
                   'No production capacity, Windows/RDP or WAN assertion. Resource samples are periodic, '
                   'not continuous. Queue deferrals are retained in Qt logs, not a continuous queue maximum.')
-    actors, guards, identities, tokens, ports = {}, {}, {}, {}, {}
+    actors, guards, identities, tokens, endpoints_by_user = {}, {}, {}, {}, {}
     started = time.monotonic()
 
     def save():
@@ -129,8 +130,8 @@ def main():
                 identities[user] = (actor.session['pid'], actor.session['generation'])
                 manifest_path = workspace.STACK/'workspaces/users'/user/actor.session['generation']/'launcher.json'
                 manifest = json.loads(manifest_path.read_text())
-                assert manifest['render_backend'] == 'qt-ws' and manifest['app_pid'] == actor.session['pid'], manifest
-                ports[user] = manifest['ws_port']
+                assert manifest['render_backend'] == args.render_backend and manifest['app_pid'] == actor.session['pid'], manifest
+                endpoints_by_user[user] = manifest['ws_port'] if args.render_backend == 'qt-ws' else manifest['rfb_socket']
                 actor.edit('field_name', f'Soak unsaved {user}')
                 actor.wait(lambda s: s.get('dirty') and s.get('form_values', {}).get('name') == f'Soak unsaved {user}')
                 tokens[user] = ''
@@ -224,7 +225,11 @@ def main():
                 workspace.wait_for(lambda: not suite.processes(), 15)
                 listeners = suite.command('exec', 'swag-host', 'ss', '-ltnH').stdout
                 endpoints = {line.split()[3] for line in listeners.splitlines()}
-                assert all(f'127.0.0.1:{port}' not in endpoints for port in ports.values()), endpoints
+                if args.render_backend == 'qt-ws':
+                    assert all(f'127.0.0.1:{port}' not in endpoints for port in endpoints_by_user.values()), endpoints
+                else:
+                    for socket_path in endpoints_by_user.values():
+                        suite.command('exec', 'swag-host', 'test', '!', '-e', socket_path)
             except Exception as error:
                 cleanup_errors.append(repr(error))
             result['cleanup'] = dict(status='fail' if cleanup_errors else 'pass', errors=cleanup_errors)

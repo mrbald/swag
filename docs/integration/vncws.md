@@ -2,7 +2,8 @@
 
 Copy `src/plugins/vncws/` as a directory and build it against the client's Qt
 development packages. Its standalone CMake build requires CMake 3.16+, C++17,
-Qt 5.15 Core/Gui/Network/WebSockets, Qt's matching private headers and static
+Qt 5.15 Core/Gui/Network/WebSockets (including QtNetwork's `localserver` feature),
+Qt's matching private headers and static
 platform-support libraries, pkg-config, libxkbcommon and zlib. It does not build SWAG
 or require SWAG's GCC 15/C++23 configuration. See the plugin README for EL8
 package names and the preserved upstream/SWAG license boundaries.
@@ -74,8 +75,13 @@ or `port`, and `socket` and `fd` are mutually exclusive. The Unix parent must
 exist, have mode `0700`, belong to the current UID, and use a canonical path
 without symlinks. The socket must fit Linux's pathname limit and contain neither
 `:` nor `=`. Occupied paths are rejected, never removed to make startup succeed.
-A new socket has mode `0600`. Standalone shutdown removes only its own inode;
-an inherited listener never removes the supervisor's path.
+A new socket has mode `0600`. Normal Qt application teardown removes only its
+own standalone socket inode. SIGTERM with its default action, SIGKILL, `_exit`
+and crashes bypass teardown and leave the socket behind. A restart on that path
+is refused. Use a fresh private directory per standalone start, with supervisor
+cleanup after process death, or prefer managed `fd=N` for deployment. The plugin
+does not install application signal handlers. An inherited listener never removes
+the supervisor's path.
 
 The manager reserves `/run/swag/users/{user}/{generation}/rfb.sock`, retains the
 listener through locked teardown, and passes `SWAG_QT_WS_LISTEN_FD` through the
@@ -85,6 +91,10 @@ the generation, process identities and socket device/inode before and after
 dialing; Linux `SO_PEERCRED` must identify the manager that created the listener.
 Teardown closes the viewer and stops the acceptor before releasing the listener
 and unlinking its matching inode. Replacement paths are preserved.
+For `qt-unix`, `SWAG_RUNTIME_DIR` must be absolute and canonical, without
+symlink traversal, `:` or `=`. Its encoded length may be at most 26 bytes on
+Linux, leaving room for a 32-character username and generation. Invalid roots
+are rejected when the manager loads its configuration, before any workspace starts.
 
 Qt has no TCP listener in this mode. Other UIDs are excluded by filesystem
 permissions; this does not isolate users who share the service UID. Authentication,
@@ -109,6 +119,18 @@ its slow-browser receiver check directly pressures Qt, while the Unix probe's
 websockify bridge buffers frames. Unix backpressure is measured separately by
 `paused_reader_defers_and_recovers` in the native suite; the bridge run does not
 claim that result.
+
+On 2026-11-03 the Unix path passed 23 native socket checks and 22 checks in the
+clean runtime-only EL8 image; 125 protocol/browser checks; 35 authenticated
+application checks; 8 process-death ownership checks; and 79 Linux unit
+tests. TCP compatibility passed 126 protocol/browser and 29 startup checks.
+The same plugin, unchanged application executable and patched noVNC client were
+used throughout. Native 3440×1440 resizing and three ultrawide synthetic network
+profiles passed. A two-user, five-minute soak completed 30 cycles with no
+unexpected disconnects or browser errors and removed both sockets on teardown.
+Evidence: `artifacts/qt-ws-unix/verified-summary.json`. This is bounded local
+qualification on EL8 aarch64 and macOS Chrome, not client/Windows/RDP or production
+capacity qualification.
 
 ## Verification retained in this repository
 

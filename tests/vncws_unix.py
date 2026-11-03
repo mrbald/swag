@@ -414,6 +414,42 @@ class Acceptance:
                 client.close()
         return {'replacement_inode_preserved': True}
 
+    def terminated_standalone_restart(self):
+        case = self.case()
+        path = case/'rfb.sock'
+        with self.app(case, f'socket={path}') as app:
+            app.ready()
+            original = socket_identity(path)
+            app.process.terminate()
+            termination_code = app.process.wait(timeout=8)
+            assert termination_code != 0, termination_code
+        assert socket_identity(path) == original, 'SIGTERM unexpectedly removed the standalone socket'
+
+        # Keep state/log output separate so stale readiness from the first
+        # process cannot make the rejected restart appear to have initialized.
+        restart_case = self.case()
+        with self.app(restart_case, f'socket={path}') as restarted:
+            assert restarted.process.wait(timeout=8) != 0, 'occupied path restart was accepted'
+            assert not restarted.state().get('ready'), 'rejected restart published readiness'
+        assert socket_identity(path) == original, 'restart removed or replaced the residual socket'
+
+        fresh_case = self.case()
+        fresh_path = fresh_case/'rfb.sock'
+        with self.app(fresh_case, f'socket={fresh_path}') as fresh:
+            fresh.ready()
+            client = Rfb(fresh_path)
+            try:
+                client.init()
+                client.socket.sendall(request())
+                client.update()
+                fresh.quit(client)
+            finally:
+                client.close()
+        assert not fresh_path.exists(), 'normal Qt exit left the fresh generation socket'
+        assert socket_identity(path) == original, 'fresh generation disturbed the previous socket'
+        return {'termination_code': termination_code, 'residual_inode_preserved': True,
+                'same_path_restart_rejected': True, 'fresh_generation_started_and_cleaned': True}
+
     def rejected(self, parameter, setup=None):
         case = self.case()
         path = case/'rfb.sock'
@@ -473,6 +509,8 @@ class Acceptance:
         self.run('protocol_faults_close_only_the_viewer', self.protocol_faults)
         self.run('inherited_listener_and_path_survive_qt_exit', self.inherited)
         self.run('standalone_cleanup_preserves_replacement_socket', self.replacement_cleanup)
+        self.run('terminated_standalone_requires_fresh_generation_or_cleanup',
+                 self.terminated_standalone_restart)
         for name, parameter in (
             ('relative_path', 'socket=relative.sock'),
             ('abstract_name', 'socket=@abstract'),

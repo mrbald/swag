@@ -64,3 +64,10 @@ podman rm --force swag-runtime-check
 This is a standalone runtime/source-copy qualification for the probe and plugin.
 It does not qualify the client application's own dependencies, Qt build, CPU
 architecture, Windows/RDP input, authentication or production deployment.
+
+The same runtime image supports the Unix transport. To exercise that path without
+adding a bridge or development tools, run the native acceptance harness as root
+with `--entrypoint python3.12`, mounting `tests/vncws_unix.py` and an evidence
+directory as in the [Unix integration guide](../../docs/integration/vncws.md#unix-socket-transport).
+The harness launches Qt as UID 1000 and tests denied access as UID 1001.
+Authenticated browser qualification remains a separate application gate.

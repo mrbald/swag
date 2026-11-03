@@ -67,15 +67,20 @@ your application can keep C++23/GCC Toolset 15.
    to your proxy/supervisor; the plugin does not authenticate viewers. The
    infrastructure RPM and site configuration remain separate from the application.
 
-For a private Unix socket on Linux, create a directory owned by the application
-user with mode `0700`, then launch:
+For a private Unix socket on Linux, provision `/run/client-app` for the application
+UID with mode `0700`. Create a fresh private directory for each process start:
 
 ```sh
-install -d -m 700 /run/client-app/session
+session_dir=$(mktemp -d /run/client-app/session.XXXXXX)
 QT_PLUGIN_PATH=/opt/client-app/plugins \
-QT_QPA_PLATFORM=vncws:size=1280x800:socket=/run/client-app/session/rfb.sock \
+QT_QPA_PLATFORM="vncws:size=1280x800:socket=$session_dir/rfb.sock" \
 QT_FORCE_STDERR_LOGGING=1 /opt/client-app/bin/client-app
 ```
+
+Normal Qt application teardown removes its socket. SIGTERM without an application
+handler, SIGKILL and crashes leave it behind; reusing that path fails safely. A
+supervisor should clean its own abandoned generation after process death, or
+use the managed `fd=N` mode for deployment.
 
 The socket has mode `0600` and carries **raw RFB**. The authenticated supervisor
 must bridge the browser's binary WebSocket to it; a browser cannot connect to a

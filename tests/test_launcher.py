@@ -74,7 +74,7 @@ class LauncherChildren(unittest.TestCase):
     def launch_workspace(self, environment_overrides):
         """Exercise child selection and the persisted manifest with fake children."""
         with tempfile.TemporaryDirectory(prefix="swag-l-", dir="/tmp") as temporary, ExitStack() as stack:
-            root = Path(temporary)
+            root = Path(temporary).resolve()
             generation = "a" * 32
             launch_runtime = root / "runtime" / "users" / "alice" / generation
             launch_runtime.mkdir(parents=True, mode=0o700)
@@ -208,7 +208,7 @@ class LauncherChildren(unittest.TestCase):
 
     def test_qt_unix_rejects_missing_invalid_and_wrong_family_descriptors(self):
         with tempfile.TemporaryDirectory(prefix="swag-fd-", dir="/tmp") as temporary:
-            path = Path(temporary) / "rfb.sock"
+            path = Path(temporary).resolve() / "rfb.sock"
             for value in (None, "garbage", "-1", "0", "2"):
                 environment = {} if value is None else {launcher.QT_WS_LISTEN_FD: value}
                 with self.subTest(value=value), patch.dict(os.environ, environment, clear=True):
@@ -224,7 +224,7 @@ class LauncherChildren(unittest.TestCase):
 
     def test_qt_unix_rejects_wrong_path_and_insecure_socket(self):
         with tempfile.TemporaryDirectory(prefix="swag-fd-", dir="/tmp") as temporary:
-            path = Path(temporary) / "rfb.sock"
+            path = Path(temporary).resolve() / "rfb.sock"
             with reserve_unix_listener(path) as reservation:
                 for expected, mode in ((path.with_name("other.sock"), 0o600), (path, 0o666)):
                     path.chmod(mode)

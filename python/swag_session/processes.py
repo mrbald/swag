@@ -15,11 +15,22 @@ import sys
 QT_WS_LISTEN_FD = "SWAG_QT_WS_LISTEN_FD"
 
 
+def validate_unix_path(path: Path, *, suffix_bytes: int = 0) -> None:
+    """Match the Qt listener's canonical filesystem path and parameter limits."""
+    if (not path.is_absolute() or any(character in str(path) for character in "\0:=")
+            or len(os.fsencode(path)) + suffix_bytes > (103 if sys.platform == "darwin" else 107)):
+        raise ValueError("Unix listener requires a short canonical absolute path without ':', '=' or NUL")
+    try:
+        canonical = path.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        raise ValueError("Unix listener path cannot be resolved") from error
+    if canonical != path:
+        raise ValueError("Unix listener path must be canonical, without symlinks")
+
+
 def unix_socket_identity(path: Path) -> tuple[int, int]:
     """Validate the private filesystem endpoint without following its final link."""
-    if (not path.is_absolute() or "\0" in str(path)
-            or len(os.fsencode(path)) > (103 if sys.platform == "darwin" else 107)):
-        raise ValueError("Unix listener requires a short absolute filesystem path")
+    validate_unix_path(path)
     parent = path.parent.lstat()
     if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid()
             or stat.S_IMODE(parent.st_mode) != 0o700):
@@ -44,9 +55,7 @@ def unlink_owned_socket(path: Path, identity: tuple[int, int]) -> None:
 
 def reserve_unix_listener(path: Path) -> socket.socket:
     """Bind exclusively in an existing private generation directory."""
-    if (not path.is_absolute() or "\0" in str(path)
-            or len(os.fsencode(path)) > (103 if sys.platform == "darwin" else 107)):
-        raise ValueError("Unix listener requires a short absolute filesystem path")
+    validate_unix_path(path)
     parent = path.parent.lstat()
     if (not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid()
             or stat.S_IMODE(parent.st_mode) != 0o700):
