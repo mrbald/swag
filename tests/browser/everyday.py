@@ -24,7 +24,7 @@ class FixtureActor(workspace.Actor):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--backend', choices=('qt-ws', 'tiger'), default='qt-ws')
+    parser.add_argument('--backend', choices=('qt-ws', 'qt-unix', 'tiger'), default='qt-ws')
     parser.add_argument('--context-menu-only', action='store_true',
                         help='Run only the context-menu browser comparison')
     parser.add_argument('--engine', default='podman')
@@ -49,7 +49,7 @@ def main():
                 actor.connected()
             else:
                 probe = smoke.Probe(args.engine, args.backend, output, args.port,
-                                    'unix' if args.backend == 'tiger' else 'websocket')
+                                    'unix' if args.backend in {'tiger', 'qt-unix'} else 'websocket')
                 probe.start()
                 probe.connect(browser.new_context(viewport={'width': 1440, 'height': 1040}))
                 actor = probe

@@ -1,7 +1,8 @@
 # vncws Qt platform plugin
 
 This Qt 5.15 QPA plugin adapts Qt's VNC platform plugin to serve binary RFB
-through a WebSocket listener inside the Qt process. The directory builds on
+through a WebSocket listener or a Linux filesystem Unix-domain socket inside
+the Qt process. The directory builds on
 its own; no SWAG application source or GCC 15 toolchain is needed.
 
 On AlmaLinux 8, install `cmake`, a C++17 compiler, `pkgconf-pkg-config`,
@@ -28,8 +29,10 @@ viewer takes over the connection.
 Accepted parameters are `size=WxH` (each dimension 64–4096, area at most
 4,953,600 pixels, including native 3440×1440), `depth=32`, `port=1..65535`, and `addr=` followed by a
 dotted-decimal IPv4 address. Supervised Linux launches may instead use `fd=N`
-to adopt an inherited, already listening TCP socket bound to `127.0.0.1`;
-`fd` cannot be combined with `addr` or `port`. The plugin restores
+to adopt an inherited, already listening TCP socket bound to `127.0.0.1` or a
+filesystem Unix stream socket. The descriptor's family selects WebSocket/TCP
+or raw RFB/Unix transport; `fd` cannot be combined with `addr`, `port` or `socket`.
+The plugin restores
 close-on-exec on that descriptor. Defaults are 1024x768, depth 32, port 5900,
 and 127.0.0.1. Invalid, duplicate, or unknown parameters fail startup. The RFB
 handshake is limited to 10 seconds. RFB 3.3 has no authentication or encryption;
@@ -52,6 +55,33 @@ can clear stale text and display an explanation; a later valid copy clears it.
 Unpatched noVNC ignores that notification. Legacy viewers cannot report this
 availability state and retain the previous silent-omission behavior.
 
+For standalone Linux Unix-socket mode, create a private directory owned by the
+application UID and select `socket=` instead of `port=`:
+
+```sh
+install -d -m 0700 /run/client-app
+QT_PLUGIN_PATH=/opt/vncws/plugins \
+  QT_QPA_PLATFORM=vncws:size=1280x800:socket=/run/client-app/rfb.sock \
+  /path/to/qt5-application
+```
+
+This serves **raw RFB**, not WebSocket frames, and opens no TCP listener. The
+browser still connects to an authenticated WebSocket gateway; that gateway forwards
+RFB bytes to the Unix socket. The socket has mode `0600`; its immediate parent
+must already have mode `0700` and belong to the application UID. Paths must be
+absolute, canonical, shorter than 108 encoded bytes and contain neither `:` nor
+`=` (Qt platform parameter delimiters). Abstract sockets and symlink traversal
+are rejected. `socket` is mutually exclusive with `addr`, `port` and `fd`.
+
+An occupied pathname is never removed, including a stale socket after a crash.
+For standalone mode, orderly shutdown removes only the socket inode created by
+this process. A supervisor using `fd=N` owns pathname creation and cleanup: the
+plugin closes its descriptor but never unlinks the inherited pathname. The
+inherited socket and parent must have the same ownership/modes described above.
+Keep listener reservation and generation cleanup under supervisor control.
+These permissions restrict other UIDs; they do not isolate processes sharing
+the application UID, or root.
+
 The accepted client pixel formats are 32 bits per pixel, depth 24 or 32,
 little-endian true color with 8-bit red/green/blue channels and shifts either
 16/8/0 or 0/8/16. The latter is noVNC's default and is converted before
@@ -68,10 +98,10 @@ renegotiation. Raw remains the fallback. Pending pixels and cursor rectangles
 share one framebuffer response when both are ready.
 Cursor rectangles are bounded to 1 MiB including header, pixels and mask.
 Pixel/cursor updates are spaced by at least 16 ms; the first update after idle runs on the next event-loop
-turn. Updates are deferred while the WebSocket output queue is congested;
-clipboard and size replies retain their stream order. On Linux, the listener
+turn. Updates are deferred while the transport output queue is congested;
+clipboard and size replies retain their stream order. On Linux, the TCP listener
 enables TCP_NODELAY for accepted connections to avoid delaying small frames.
-Compressed responses are staged under a 24 MiB cap; the WebSocket output queue
+Compressed responses are staged under a 24 MiB cap; each transport's output queue
 is capped at 32 MiB. These bounds include the larger framebuffer while preserving
 the 1 MiB defer / 512 KiB resume thresholds. The supplied workspace viewer scales
 the existing desktop and displays a notice above the supported geometry limit.

@@ -25,7 +25,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["build", "run", "stop"])
     parser.add_argument("--engine", default=os.getenv("SWAG_CONTAINER_ENGINE", "podman"))
-    parser.add_argument("--backend", choices=["qt", "tiger", "qt-ws"], default="tiger")
+    parser.add_argument("--backend", choices=["qt", "tiger", "qt-ws", "qt-unix"], default="tiger")
     parser.add_argument("--transport", choices=["tcp", "unix", "websocket"])
     parser.add_argument("--name", default="swag-probe")
     parser.add_argument("--port", type=int, default=6080)
@@ -35,9 +35,9 @@ def main() -> int:
         parser.error("container names must start with swag-")
     if not shutil.which(args.engine):
         parser.error(f"container engine not found: {args.engine}")
-    image = "localhost/swag-probe-ws:dev" if args.backend == "qt-ws" else IMAGE
+    image = "localhost/swag-probe-ws:dev" if args.backend in {"qt-ws", "qt-unix"} else IMAGE
     if args.action == "build":
-        command(args.engine, "build", "--target", "probe-ws" if args.backend == "qt-ws" else "probe", "-f", "containers/Containerfile", "-t", image, ".")
+        command(args.engine, "build", "--target", "probe-ws" if args.backend in {"qt-ws", "qt-unix"} else "probe", "-f", "containers/Containerfile", "-t", image, ".")
         return 0
     if args.action == "stop":
         command(args.engine, "stop", "--time", "5", args.name)
@@ -46,11 +46,13 @@ def main() -> int:
     if not 1 <= args.port <= (65534 if args.backend == "qt-ws" else 65535):
         parser.error("port must be valid and leave room for the qt-ws WebSocket port (+1)")
     transport = args.transport or ("websocket" if args.backend == "qt-ws" else
-                                   "unix" if args.backend == "tiger" else "tcp")
+                                   "unix" if args.backend in {"tiger", "qt-unix"} else "tcp")
     if args.backend == "qt-ws" and transport != "websocket":
         parser.error("qt-ws supports WebSocket transport only")
     if args.backend != "qt-ws" and transport == "websocket":
         parser.error("WebSocket transport requires qt-ws")
+    if args.backend == "qt-unix" and transport != "unix":
+        parser.error("qt-unix requires Unix RFB transport")
     if args.backend == "qt" and transport == "unix":
         parser.error("the unpatched Qt VNC plugin supports TCP only")
     output = (args.output or ROOT / "artifacts" / f"{time.strftime('%Y%m%d-%H%M%S')}-{args.backend}").resolve()

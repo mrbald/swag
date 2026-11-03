@@ -40,7 +40,7 @@
 #include "qvncclient.h"
 #include "qvnc_p.h"
 
-#include "qvncwebsocketstream.h"
+#include "qvncstream.h"
 #include <QtCore/QIODevice>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QtEndian>
@@ -144,7 +144,7 @@ bool decodeClipboardText(const QByteArray &compressed, QString *text)
 }
 } // namespace
 
-QVncClient::QVncClient(QIODevice *clientSocket, QVncServer *server)
+QVncClient::QVncClient(QVncStream *clientSocket, QVncServer *server)
     : QObject(server)
     , m_server(server)
     , m_clientSocket(clientSocket)
@@ -169,8 +169,8 @@ QVncClient::QVncClient(QIODevice *clientSocket, QVncServer *server)
     m_clientSocket->setParent(this);
     connect(m_clientSocket,SIGNAL(readyRead()),this,SLOT(readClient()));
     connect(m_clientSocket,SIGNAL(disconnected()),this,SLOT(discardClient()));
-    connect(static_cast<QVncWebSocketStream *>(m_clientSocket),
-            &QVncWebSocketStream::outputDrained, this, &QVncClient::onOutputDrained);
+    connect(m_clientSocket,
+            &QVncStream::outputDrained, this, &QVncClient::onOutputDrained);
     m_updateTimer.setSingleShot(true);
     m_updateTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_updateTimer, &QTimer::timeout, this, [this]() {
@@ -207,7 +207,7 @@ void QVncClient::close()
     m_handshakeTimer.stop();
     m_updateTimer.stop();
     releaseInput();
-    static_cast<QVncWebSocketStream *>(m_clientSocket)->close();
+    m_clientSocket->close();
 }
 
 void QVncClient::releaseInput()
@@ -374,7 +374,7 @@ void QVncClient::convertPixels(char *dst, const char *src, int count) const
 void QVncClient::readClient()
 {
     // Consume every complete message in the stream. Partial messages remain in
-    // QVncWebSocketStream until the next binary WebSocket frame arrives.
+    // the bounded transport stream until more bytes arrive.
     while (m_state != Disconnected) {
         if (m_state == Protocol) {
             if (m_clientSocket->bytesAvailable() < 12)
@@ -503,7 +503,7 @@ void QVncClient::checkUpdate()
         m_wantUpdate = false;
         return;
     }
-    const qint64 pending = static_cast<QVncWebSocketStream *>(m_clientSocket)->queuedOutputBytes();
+    const qint64 pending = m_clientSocket->queuedOutputBytes();
     if (pending > 1024 * 1024) {
         if (!m_backpressureDeferred)
             qCDebug(lcVnc) << "framebuffer deferred" << pending << "queued bytes";
@@ -647,7 +647,7 @@ void QVncClient::onOutputDrained()
 {
     if (!m_backpressureDeferred || m_state != Connected)
         return;
-    const qint64 pending = static_cast<QVncWebSocketStream *>(m_clientSocket)->queuedOutputBytes();
+    const qint64 pending = m_clientSocket->queuedOutputBytes();
     if (pending > 512 * 1024)
         return;
     m_backpressureDeferred = false;

@@ -20,6 +20,9 @@ add_library(qvncws MODULE
     qvncintegration.cpp qvncintegration.h
     qvncscreen.cpp qvncscreen.h
     qvncwebsocketstream.cpp qvncwebsocketstream.h
+    qvncstream.h
+    qvnclocalstream.cpp qvnclocalstream.h
+    qvncunixlistener.cpp qvncunixlistener.h
     vnc.json
 )
 set_target_properties(qvncws PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)

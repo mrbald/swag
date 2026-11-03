@@ -52,3 +52,7 @@ Root maintains this checklist. No separate task system.
 - [x] Surface unavailable oversized outbound clipboard text; verify real noVNC/shell failure and recovery plus functional regressions, commit/push.
 - [x] Add one functional regression entry point; pass 7 runner contract tests, 126 default checks and 26 selected app checks, commit/push.
 - [x] Qualify the installed probe/plugin in a clean runtime-only EL8 image; verify packages/libraries/hashes and 4 real browser checks, document dependencies, commit/push.
+
+- [x] Add bounded Unix RFB plugin transport, safe pathname/inherited-FD ownership and native acceptance; commit/push.
+- [ ] Integrate qt-unix manager/launcher and tools, verify lifetime/admission/cleanup and browser regressions; commit/push.
+- [ ] Qualify integrated Unix transport, record limits and restore the demo using the safer mode.

@@ -220,7 +220,17 @@ async def checks(url, output):
         await check('fragmented_encoding_list',fragmented)
         await check('small_updates_remain_paced',paced_burst)
         await check('maximum_frame_resize_same_stream',large_resize)
-        await check('slow_reader_coalesces_and_recovers',slow_reader)
+        backend = json.loads((output/'backend.json').read_text())['backend']
+        if backend == 'qt-unix':
+            # websockify queues whole frames, so pausing the browser side does
+            # not reliably backpressure Qt. Test the raw Unix receiver directly
+            # in vncws_unix.py; do not credit this bridge run with that assertion.
+            (output/'scope.json').write_text(json.dumps({
+                'backpressure': 'Not measured through the probe websockify bridge',
+                'required_native_check': 'vncws_unix.py: paused_reader_defers_and_recovers',
+            }, indent=2)+'\n')
+        else:
+            await check('slow_reader_coalesces_and_recovers',slow_reader)
         await check('fresh_connection_after_pressure',equivalence)
     return results
 

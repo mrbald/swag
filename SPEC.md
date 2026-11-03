@@ -197,3 +197,10 @@ protocol-compatible availability feedback; provide one explicit functional test
 gate with machine-readable results and separate network/soak qualification; prove
 the installed probe/plugin works in a fresh EL8 runtime image without build tools.
 Test and commit/push each slice. This does not replace actual-client qualification.
+
+Approved Unix-domain transport: retain TCP/WebSocket mode and add explicit qt-unix
+raw RFB over a filesystem socket, with no Qt TCP listener. Require socket0600
+in an owned0700 directory; manager retains an inherited listener until locked
+generation teardown. Reject unsafe paths and preserve foreign files/replacements.
+Verify native transport/permissions/lifecycle, then real noVNC and original app
+workflows; integration/nonfunctional gates last. Commit/push tested slices.

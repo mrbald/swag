@@ -14,7 +14,7 @@ constexpr qint64 MaxOutputBytes = 32 * 1024 * 1024;
 }
 
 QVncWebSocketStream::QVncWebSocketStream(QWebSocket *socket, QObject *parent)
-    : QIODevice(parent), m_socket(socket)
+    : QVncStream(parent), m_socket(socket)
 {
     m_socket->setParent(this);
     m_socket->setMaxAllowedIncomingFrameSize(MaxInputBytes);

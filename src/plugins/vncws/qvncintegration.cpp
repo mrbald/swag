@@ -65,27 +65,35 @@
 #include <sys/socket.h>
 #endif
 
+#include "qvncunixlistener.h"
+
 QT_BEGIN_NAMESPACE
 
 namespace {
 
-quint16 validateListeningFd(int fd)
+quint16 validateListeningFd(int fd, QString *localPath)
 {
 #ifdef Q_OS_UNIX
     int type = 0;
     socklen_t length = sizeof(type);
     if (::getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &length) != 0 ||
         length != sizeof(type) || type != SOCK_STREAM)
-        qFatal("vncws: fd must be a listening loopback TCP socket");
+        qFatal("vncws: fd must be a listening TCP or Unix stream socket");
     int accepting = 0;
     length = sizeof(accepting);
     if (::getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &accepting, &length) != 0 ||
         length != sizeof(accepting) || accepting != 1)
         qFatal("vncws: fd must already be listening");
-    sockaddr_in address{};
-    length = sizeof(address);
-    if (::getsockname(fd, reinterpret_cast<sockaddr *>(&address), &length) != 0 ||
-        length != sizeof(address) || address.sin_family != AF_INET ||
+    sockaddr_storage storage{};
+    length = sizeof(storage);
+    if (::getsockname(fd, reinterpret_cast<sockaddr *>(&storage), &length) != 0)
+        qFatal("vncws: cannot inspect inherited listener address");
+    if (storage.ss_family == AF_UNIX) {
+        *localPath = QVncUnixListener::validateDescriptor(fd);
+        return 0;
+    }
+    const auto &address = reinterpret_cast<const sockaddr_in &>(storage);
+    if (length != sizeof(address) || address.sin_family != AF_INET ||
         ntohl(address.sin_addr.s_addr) != 0x7f000001U ||
         ntohs(address.sin_port) == 0)
         qFatal("vncws: fd must bind 127.0.0.1 on a nonzero TCP port");
@@ -95,6 +103,7 @@ quint16 validateListeningFd(int fd)
     return ntohs(address.sin_port);
 #else
     Q_UNUSED(fd)
+    Q_UNUSED(localPath)
     qFatal("vncws: inherited fd requires a Unix platform");
 #endif
 }
@@ -109,6 +118,7 @@ QVncIntegration::QVncIntegration(const QStringList &paramList)
     QHostAddress address(QHostAddress::LocalHost);
     quint16 port = 5900;
     int inheritedFd = -1;
+    QString localPath;
     QSet<QString> seen;
     const QRegularExpression sizeRx(QStringLiteral("^([0-9]+)x([0-9]+)$"));
     const QRegularExpression ipv4Rx(QStringLiteral("^([0-9]{1,3}\\.){3}[0-9]{1,3}$"));
@@ -145,6 +155,8 @@ QVncIntegration::QVncIntegration(const QStringList &paramList)
             if (!ipv4Rx.match(value).hasMatch() || !address.setAddress(value) ||
                 address.protocol() != QAbstractSocket::IPv4Protocol)
                 qFatal("vncws: addr must be a dotted-decimal IPv4 address");
+        } else if (key == QLatin1String("socket")) {
+            localPath = value;
         } else if (key == QLatin1String("fd")) {
             bool valid = false;
             const int number = value.toInt(&valid);
@@ -155,14 +167,17 @@ QVncIntegration::QVncIntegration(const QStringList &paramList)
             qFatal("vncws: unknown platform parameter '%s'", qPrintable(key));
         }
     }
+    if (!localPath.isEmpty() && (inheritedFd >= 0 || seen.contains(QStringLiteral("addr")) ||
+                                 seen.contains(QStringLiteral("port"))))
+        qFatal("vncws: socket cannot be combined with fd, addr or port");
     if (inheritedFd >= 0) {
         if (seen.contains(QStringLiteral("addr")) || seen.contains(QStringLiteral("port")))
             qFatal("vncws: fd cannot be combined with addr or port");
-        port = validateListeningFd(inheritedFd);
+        port = validateListeningFd(inheritedFd, &localPath);
     }
 
     m_primaryScreen = new QVncScreen(size);
-    m_server = new QVncServer(m_primaryScreen, address, port, inheritedFd);
+    m_server = new QVncServer(m_primaryScreen, address, port, inheritedFd, localPath);
     m_primaryScreen->vncServer = m_server;
 }
 

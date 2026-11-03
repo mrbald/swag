@@ -50,6 +50,7 @@
 QT_BEGIN_NAMESPACE
 
 class QIODevice;
+class QVncStream;
 class QVncServer;
 
 class QVncClient : public QObject
@@ -67,7 +68,7 @@ public:
         SetDesktopSize = 251
     };
 
-    explicit QVncClient(QIODevice *clientSocket, QVncServer *server);
+    explicit QVncClient(QVncStream *clientSocket, QVncServer *server);
     ~QVncClient();
     QIODevice *clientSocket() const;
     QVncServer *server() const { return m_server; }
@@ -127,7 +128,7 @@ private:
     bool pixelConversionNeeded() const;
 
     QVncServer *m_server;
-    QIODevice *m_clientSocket;
+    QVncStream *m_clientSocket;
     QRfbEncoder *m_encoder;
 
     // Client State

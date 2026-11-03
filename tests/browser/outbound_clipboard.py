@@ -12,6 +12,7 @@ from everyday import FixtureActor
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--backend', choices=('qt-ws', 'qt-unix'), default='qt-ws')
     parser.add_argument('--engine', default='podman')
     parser.add_argument('--port', type=int, default=6290)
     parser.add_argument('--workspace-origin')
@@ -33,7 +34,8 @@ def main():
                 actor.page.reload(wait_until='domcontentloaded')
                 actor.connected()
             else:
-                probe = smoke.Probe(args.engine, 'qt-ws', output, args.port, 'websocket')
+                probe = smoke.Probe(args.engine, args.backend, output, args.port,
+                                    'unix' if args.backend == 'qt-unix' else 'websocket')
                 probe.start()
                 probe.connect(browser.new_context(viewport={'width': 1440, 'height': 1040}))
                 actor = probe

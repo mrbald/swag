@@ -1,7 +1,7 @@
 #ifndef QVNCWEBSOCKETSTREAM_H
 #define QVNCWEBSOCKETSTREAM_H
 
-#include <QtCore/QIODevice>
+#include "qvncstream.h"
 #include <QtCore/QByteArray>
 
 QT_BEGIN_NAMESPACE
@@ -10,19 +10,14 @@ class QWebSocket;
 
 // The RFB decoder consumes a byte stream. WebSocket message boundaries are
 // deliberately hidden here; every outgoing write becomes one binary frame.
-class QVncWebSocketStream final : public QIODevice
+class QVncWebSocketStream final : public QVncStream
 {
     Q_OBJECT
 public:
     explicit QVncWebSocketStream(QWebSocket *socket, QObject *parent = nullptr);
-    bool isSequential() const override { return true; }
     qint64 bytesAvailable() const override;
-    qint64 queuedOutputBytes() const;
+    qint64 queuedOutputBytes() const override;
     void close() override;
-
-signals:
-    void disconnected();
-    void outputDrained();
 
 protected:
     qint64 readData(char *data, qint64 maxSize) override;

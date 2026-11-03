@@ -82,15 +82,17 @@ def stop(process: subprocess.Popen[bytes], signum: int = signal.SIGTERM) -> None
 
 def main() -> int:
     backend = os.environ.get("SWAG_BACKEND", "qt")
-    transport = os.environ.get("SWAG_RFB_TRANSPORT", "websocket" if backend == "qt-ws" else "tcp")
+    transport = os.environ.get("SWAG_RFB_TRANSPORT", "websocket" if backend == "qt-ws" else "unix" if backend == "qt-unix" else "tcp")
     username = os.environ.get("SWAG_USER", "probe")
     generation = os.environ.get("SWAG_GENERATION", "1")
-    if backend not in {"qt", "tiger", "qt-ws"}:
-        raise ValueError("SWAG_BACKEND must be qt, tiger or qt-ws")
+    if backend not in {"qt", "tiger", "qt-ws", "qt-unix"}:
+        raise ValueError("SWAG_BACKEND must be qt, tiger, qt-ws or qt-unix")
     if transport not in {"tcp", "unix", "websocket"}:
         raise ValueError("SWAG_RFB_TRANSPORT must be tcp, unix or websocket")
     if (backend == "qt-ws") != (transport == "websocket"):
         raise ValueError("qt-ws requires websocket transport, and only qt-ws supports it")
+    if backend == "qt-unix" and transport != "unix":
+        raise ValueError("qt-unix requires Unix RFB transport")
     if backend in {"qt", "qt-ws"} and transport == "unix":
         raise ValueError("SWAG_BACKEND=qt does not support Unix RFB transport (unpatched Qt plugin)")
     if not re.fullmatch(r"[A-Za-z0-9]{1,32}", username):
@@ -108,6 +110,7 @@ def main() -> int:
     if not Path(APP).is_file():
         raise FileNotFoundError(APP)
     rfb_socket: Path | None = None
+    rfb_identity = None
     if transport == "unix":
         users = Path("/run/swag/users")
         users.mkdir(mode=0o700, exist_ok=True)
@@ -184,8 +187,12 @@ def main() -> int:
             helpers.append(("vncconfig", launch("vncconfig", ["vncconfig", "-nowin"])))
         else:
             os.environ.pop("DISPLAY", None)
-            platform = "vncws" if backend == "qt-ws" else "vnc"
+            platform = "vncws" if backend in {"qt-ws", "qt-unix"} else "vnc"
             os.environ["QT_QPA_PLATFORM"] = f"{platform}:size={GEOMETRY}:port={VNC_PORT}"
+            if backend == "qt-unix":
+                os.environ["QT_QPA_PLATFORM"] = f"vncws:size={GEOMETRY}:socket={rfb_socket}"
+                os.environ["QT_PLUGIN_PATH"] = "/opt/swag/plugins"
+                os.environ["QT_FORCE_STDERR_LOGGING"] = "1"
             if backend == "qt-ws":
                 # The published host ports remain loopback-only; Qt listens on
                 # the container interface so Podman's forwarding can reach it.
@@ -197,6 +204,9 @@ def main() -> int:
         metadata["appPid"] = app.pid
         atomic_json(artifacts / "backend.json", metadata)
         wait_for(rfb_ready, "RFB endpoint")
+        if rfb_socket is not None:
+            info = rfb_socket.lstat()
+            rfb_identity = (info.st_dev, info.st_ino)
         if backend == "qt-ws":
             helpers.append(("http", launch("http", [
                 "/usr/bin/python3.12", "-m", "http.server", str(WEB_PORT),
@@ -244,8 +254,13 @@ def main() -> int:
             stop(child)
         if app is not None and app.poll() is None:
             stop(app)
-        if rfb_socket is not None and rfb_socket.is_socket():
-            rfb_socket.unlink()
+        if rfb_socket is not None and rfb_identity is not None:
+            try:
+                info = rfb_socket.lstat()
+                if (info.st_dev, info.st_ino) == rfb_identity:
+                    rfb_socket.unlink()
+            except FileNotFoundError:
+                pass
         metadata.update(ready=False, endedAt=time.time(), exitCode=result,
                         helperFailure=helper_failure)
         atomic_json(artifacts / "backend.json", metadata)

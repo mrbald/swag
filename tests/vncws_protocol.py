@@ -251,6 +251,7 @@ async def checks(url, output):
 
 def main(checks_fn=checks, default_output=ROOT/'artifacts/qt-ws-hardening/protocol'):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--backend', choices=('qt-ws', 'qt-unix'), default='qt-ws')
     parser.add_argument('--engine', default='podman')
     parser.add_argument('--port', type=int, default=6102)
     parser.add_argument('--output', type=Path, default=default_output)
@@ -259,7 +260,7 @@ def main(checks_fn=checks, default_output=ROOT/'artifacts/qt-ws-hardening/protoc
     output.mkdir(parents=True, exist_ok=True)
     name = 'swag-protocol-' + uuid.uuid4().hex[:8]
     try:
-        result = command(sys.executable, 'tools/probe.py', 'run', '--backend', 'qt-ws',
+        result = command(sys.executable, 'tools/probe.py', 'run', '--backend', args.backend,
                          '--engine', args.engine, '--name', name, '--port', str(args.port),
                          '--output', str(output))
         (output/'launch.json').write_text(result.stdout)
@@ -273,7 +274,8 @@ def main(checks_fn=checks, default_output=ROOT/'artifacts/qt-ws-hardening/protoc
             time.sleep(.1)
         else:
             raise TimeoutError('probe readiness')
-        results = asyncio.run(checks_fn(f'http://127.0.0.1:{args.port+1}/websockify', output))
+        endpoint_port = args.port + 1 if args.backend == 'qt-ws' else args.port
+        results = asyncio.run(checks_fn(f'http://127.0.0.1:{endpoint_port}/websockify', output))
         return int(any(r['status'] != 'pass' for r in results))
     finally:
         result = command(args.engine, 'logs', name, check=False)

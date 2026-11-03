@@ -55,6 +55,8 @@ Q_DECLARE_LOGGING_CATEGORY(lcVnc)
 
 class QIODevice;
 class QWebSocketServer;
+class QVncStream;
+class QVncUnixListener;
 
 class QVncScreen;
 class QVncServer;
@@ -417,7 +419,7 @@ class QVncServer : public QObject
     Q_OBJECT
 public:
     QVncServer(QVncScreen *screen, const QHostAddress &address, quint16 port,
-               int inheritedFd = -1);
+               int inheritedFd = -1, const QString &localPath = QString());
     ~QVncServer();
 
     enum ServerMsg { FramebufferUpdate = 0,
@@ -438,12 +440,15 @@ private slots:
     void init();
 
 private:
+    void acceptClient(QVncStream *stream);
     QWebSocketServer *serverSocket = nullptr;
+    QVncUnixListener *localServer = nullptr;
     QVector<QVncClient*> clients;
     QVncScreen *qvnc_screen;
     QHostAddress m_address;
     quint16 m_port;
     int m_inheritedFd;
+    QString m_localPath;
     bool m_remoteClipboardChange = false;
 };
 

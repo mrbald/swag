@@ -41,10 +41,13 @@
 #include "qvncscreen.h"
 #include "qvncclient.h"
 #include "qvncwebsocketstream.h"
+#include "qvnclocalstream.h"
+#include "qvncunixlistener.h"
 #include <QtCore/QIODevice>
 #include <QtGui/QClipboard>
 #include <QtGui/QGuiApplication>
 #include <QtNetwork/QHostAddress>
+#include <QtNetwork/QLocalSocket>
 #include <QtWebSockets/QWebSocket>
 #include <QtWebSockets/QWebSocketServer>
 #include <qendian.h>
@@ -808,44 +811,52 @@ uint QVncClientCursor::removeClient(QVncClient *client)
 #endif // QT_CONFIG(cursor)
 
 QVncServer::QVncServer(QVncScreen *screen, const QHostAddress &address,
-                       quint16 port, int inheritedFd)
+                       quint16 port, int inheritedFd, const QString &localPath)
     : qvnc_screen(screen)
     , m_address(address)
     , m_port(port)
     , m_inheritedFd(inheritedFd)
+    , m_localPath(localPath)
 {
     QMetaObject::invokeMethod(this, "init", Qt::QueuedConnection);
 }
 
 void QVncServer::init()
 {
-    serverSocket = new QWebSocketServer(QStringLiteral("SWAG VNCWS"),
-                                        QWebSocketServer::NonSecureMode, this);
-    if (m_inheritedFd >= 0) {
-        if (!serverSocket->setNativeDescriptor(qintptr(m_inheritedFd)))
-            qFatal("vncws: cannot adopt listening fd %d: %s", m_inheritedFd,
-                   qPrintable(serverSocket->errorString()));
-    } else if (!serverSocket->listen(m_address, m_port)) {
-        qFatal("vncws: cannot listen on %s:%u: %s",
-               qPrintable(m_address.toString()), unsigned(m_port),
-               qPrintable(serverSocket->errorString()));
-    }
-#ifdef Q_OS_LINUX
-    // QWebSocket has no public socket option API in Qt 5.15. Linux copies this
-    // TCP option from the listening socket to each accepted connection.
-    const int noDelay = 1;
-    if (::setsockopt(int(serverSocket->nativeDescriptor()), IPPROTO_TCP,
-                     TCP_NODELAY, &noDelay, sizeof(noDelay)) != 0) {
-        qWarning("vncws: cannot enable TCP_NODELAY: %s", strerror(errno));
+    if (!m_localPath.isEmpty()) {
+        localServer = new QVncUnixListener(m_localPath, m_inheritedFd, this);
+        connect(localServer, &QVncUnixListener::newConnection, this,
+                [this](QLocalSocket *socket) { acceptClient(new QVncLocalStream(socket)); });
+        qInfo("vncws: Unix RFB listening on %s", qPrintable(m_localPath));
     } else {
-        qCDebug(lcVnc) << "TCP_NODELAY enabled on listener";
-    }
+        serverSocket = new QWebSocketServer(QStringLiteral("SWAG VNCWS"),
+                                            QWebSocketServer::NonSecureMode, this);
+        if (m_inheritedFd >= 0) {
+            if (!serverSocket->setNativeDescriptor(qintptr(m_inheritedFd)))
+                qFatal("vncws: cannot adopt listening fd %d: %s", m_inheritedFd,
+                       qPrintable(serverSocket->errorString()));
+        } else if (!serverSocket->listen(m_address, m_port)) {
+            qFatal("vncws: cannot listen on %s:%u: %s",
+                   qPrintable(m_address.toString()), unsigned(m_port),
+                   qPrintable(serverSocket->errorString()));
+        }
+#ifdef Q_OS_LINUX
+        // QWebSocket has no public socket option API in Qt 5.15. Linux copies this
+        // TCP option from the listening socket to each accepted connection.
+        const int noDelay = 1;
+        if (::setsockopt(int(serverSocket->nativeDescriptor()), IPPROTO_TCP,
+                         TCP_NODELAY, &noDelay, sizeof(noDelay)) != 0) {
+            qWarning("vncws: cannot enable TCP_NODELAY: %s", strerror(errno));
+        } else {
+            qCDebug(lcVnc) << "TCP_NODELAY enabled on listener";
+        }
 #endif
-    qInfo("vncws: WebSocket listening on %s:%u",
-          qPrintable(m_address.toString()), unsigned(m_port));
+        qInfo("vncws: WebSocket listening on %s:%u",
+              qPrintable(m_address.toString()), unsigned(m_port));
 
-    connect(serverSocket, &QWebSocketServer::newConnection,
-            this, &QVncServer::newConnection);
+        connect(serverSocket, &QWebSocketServer::newConnection,
+                this, &QVncServer::newConnection);
+    }
     connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this,
             [this]() {
         if (!m_remoteClipboardChange)
@@ -871,15 +882,18 @@ void QVncServer::setDirty()
 void QVncServer::newConnection()
 {
     auto *socket = serverSocket->nextPendingConnection();
+    qCDebug(lcVnc) << "new WebSocket connection from: " << socket->peerAddress();
+    acceptClient(new QVncWebSocketStream(socket));
+}
+
+void QVncServer::acceptClient(QVncStream *stream)
+{
     const auto previousClients = clients;
     for (auto *previous : previousClients)
         previous->close();
-    auto *stream = new QVncWebSocketStream(socket);
     clients.append(new QVncClient(stream, this));
 
     dirtyMap()->reset();
-
-    qCDebug(lcVnc) << "new WebSocket connection from: " << socket->peerAddress();
 
     qvnc_screen->setPowerState(QPlatformScreen::PowerStateOn);
 }

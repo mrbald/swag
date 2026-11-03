@@ -147,6 +147,14 @@ class Probe:
                 assert mode == "600", mode
                 listeners = run(self.engine, "exec", self.name, "ss", "-ltn").stdout
                 assert ":5900" not in listeners, listeners
+                if self.backend == "qt-unix":
+                    assert set(backend["helpers"]) == {"websockify"}, backend
+                    processes = run(self.engine, "exec", self.name, "ps", "-eo", "pid,comm,args").stdout
+                    assert not any(name in processes for name in ("Xvnc", "vncconfig", "openbox")), processes
+                    owned = run(self.engine, "exec", self.name, "ss", "-ltnp").stdout
+                    assert f'pid={backend["appPid"]},' not in owned, owned
+                    (self.output / "processes.txt").write_text(processes)
+                    (self.output / "listeners.txt").write_text(owned)
                 return {"transport": "unix", "socket_mode": mode, "rfb_tcp_disabled": True}
             return {"transport": "tcp"}
         self.check("transport", transport)
@@ -403,17 +411,19 @@ class Probe:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--engine", default="podman")
-    parser.add_argument("--backend", choices=["qt", "tiger", "qt-ws", "both"], default="both")
+    parser.add_argument("--backend", choices=["qt", "tiger", "qt-ws", "qt-unix", "both"], default="both")
     parser.add_argument("--transport", choices=["tcp", "unix", "websocket"])
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts" / f"render-{time.strftime('%Y%m%d-%H%M%S')}")
     parser.add_argument("--port", type=int, default=6080)
     parser.add_argument("--browser-channel", default="chrome" if sys.platform == "darwin" else None)
     args = parser.parse_args()
-    args.transport = args.transport or ("websocket" if args.backend == "qt-ws" else "tcp")
+    args.transport = args.transport or ("websocket" if args.backend == "qt-ws" else "unix" if args.backend == "qt-unix" else "tcp")
     if (args.backend == "qt-ws") != (args.transport == "websocket"):
         parser.error("qt-ws requires websocket transport, and only qt-ws supports it")
-    if args.transport == "unix" and args.backend != "tiger":
-        parser.error("Unix transport is supported by the selected TigerVNC backend only")
+    if args.backend == "qt-unix" and args.transport != "unix":
+        parser.error("qt-unix requires unix transport")
+    if args.transport == "unix" and args.backend not in {"tiger", "qt-unix"}:
+        parser.error("Unix transport requires TigerVNC or qt-unix")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     all_results = []
