@@ -4,7 +4,7 @@
 
 Qt 5 / C++23 portfolio-management implementation lab, running on AlmaLinux 8.10
 with GCC Toolset 15 and Python 3.12. The browser displays a server-rendered Qt
-desktop through noVNC and TigerVNC over private Unix sockets.
+desktop through noVNC, using TigerVNC or the direct Qt plugin.
 
 The approved scope is in [SPEC.md](SPEC.md); the short checklist is in
 [TODO.md](TODO.md). Runtime logs and screenshots go under ignored `artifacts/`.
@@ -23,84 +23,48 @@ through noVNC, observation-based assertions, screenshot review, and check suites
 
 ## Transplant the Qt plugin into your application
 
-This optional path renders Qt Widgets over WebSocket or a private Unix socket
-without X11/Xvnc.
-Use Linux raster widgets with **Qt 5.15**, and build against the **same Qt build
-and private development libraries as your application**. The plugin uses C++17;
-your application can keep C++23/GCC Toolset 15.
+For Linux Qt 5.15 raster Widgets, copy the complete
+[`src/plugins/vncws/`](src/plugins/vncws/) directory, including licenses, into
+`third_party/vncws/` in the client repository. Build against the **same Qt build
+and private development libraries as the application**. The plugin uses C++17;
+the application may keep C++23/GCC Toolset 15.
 
-1. Copy the entire [`src/plugins/vncws/`](src/plugins/vncws/) directory, including
-   its license files, into your application's repository, for example as
-   `third_party/vncws/`. The [plugin README](src/plugins/vncws/README.md) lists
-   the Qt/private-support, WebSockets, libxkbcommon and zlib build dependencies.
-2. Add it to your existing CMake project after `project(... LANGUAGES CXX)`:
+After `project(... LANGUAGES CXX)` in the application's CMake project:
 
-   ```cmake
-   add_subdirectory(third_party/vncws)
-   ```
-
-   No linking to the plugin or change to `main()` is needed: Qt loads the module
-   at startup. Build and install your application normally; the plugin's install
-   rule produces `<prefix>/plugins/platforms/libqvncws.so`. Include that file in
-   the **application RPM**, alongside the application and its runtime dependencies.
-   If your build selects only the executable target, also build target `qvncws`.
-3. For a private, single-process smoke test, launch your existing executable:
-
-   ```sh
-   QT_PLUGIN_PATH=/opt/client-app/plugins \
-   QT_QPA_PLATFORM=vncws:size=1280x800:port=5900 \
-   QT_FORCE_STDERR_LOGGING=1 \
-     /opt/client-app/bin/client-app
-   ```
-
-   Replace the paths with your install prefix. This listens on `127.0.0.1:5900`
-   and serves **binary WebSocket/RFB**, not an HTML page. Serve noVNC separately
-   and route its WebSocket connection to this listener. This repository's tested
-   client is noVNC 1.7.0 with the small
-   [clipboard availability patch](tools/patch_novnc.py); an unpatched viewer
-   still connects but does not display unavailable-copy feedback.
-4. For multiple authenticated users, let the supervisor reserve a separate
-   Unix or loopback listener per process/generation and pass its inherited descriptor as
-   `QT_QPA_PLATFORM=vncws:fd=N`. Keep the supervisor's reservation until locked
-   generation teardown, coordinating viewer admission with that same lock.
-   Authentication, TLS, identity-to-process routing and session lifetime belong
-   to your proxy/supervisor; the plugin does not authenticate viewers. The
-   infrastructure RPM and site configuration remain separate from the application.
-
-For a private Unix socket on Linux, provision `/run/client-app` for the application
-UID with mode `0700`. Create a fresh private directory for each process start:
-
-```sh
-session_dir=$(mktemp -d /run/client-app/session.XXXXXX)
-QT_PLUGIN_PATH=/opt/client-app/plugins \
-QT_QPA_PLATFORM="vncws:size=1280x800:socket=$session_dir/rfb.sock" \
-QT_FORCE_STDERR_LOGGING=1 /opt/client-app/bin/client-app
+```cmake
+add_subdirectory(third_party/vncws)
 ```
 
-Normal Qt application teardown removes its socket. SIGTERM without an application
-handler, SIGKILL and crashes leave it behind; reusing that path fails safely. A
-supervisor should clean its own abandoned generation after process death, or
-use the managed `fd=N` mode for deployment.
+Build the application and `qvncws`, then install normally. The module installs to
+`<prefix>/plugins/platforms/libqvncws.so` and belongs in the application RPM with
+its runtime dependencies. Qt loads it through `QT_PLUGIN_PATH=<prefix>/plugins`
+and `QT_QPA_PLATFORM=vncws:…`; no application linking or `main()` change is needed
+**just to load the plugin**. Reusing our session manager additionally requires
+[application identity, lifetime locking and readiness](docs/integration/README.md#application-contracts-when-reusing-this-manager).
+The plugin itself supplies neither authentication nor process supervision.
 
-The socket has mode `0600` and carries **raw RFB**. The authenticated supervisor
-must bridge the browser's binary WebSocket to it; a browser cannot connect to a
-Unix socket directly. In this repository select `--render-backend qt-unix`
-(or CMake target `app-unix-up`); the manager supplies that bridge and retains the
-inherited listener until teardown. Qt opens no TCP listener in this mode.
-Filesystem permissions exclude other UIDs; processes sharing the service UID
-remain in the same trust boundary. See [ownership and cleanup](docs/integration/vncws.md#unix-socket-transport).
+Choose one complete recipe:
 
-The qualified application layout is MDI without an external window manager.
-Check your own dialogs, popups, focus, clipboard, resize, reconnect and takeover;
-native X11 handles, OpenGL/Quick/WebEngine and IMEs are not qualified. For a
-standalone plugin build, supervisor details and acceptance checks, see the
-[plugin integration guide](docs/integration/vncws.md); for application layout
-changes, see the [Qt porting guide](docs/integration/README.md).
-The [clean-runtime transplant fixture](tests/runtime/README.md) demonstrates the
-installed probe/plugin running on matching EL8 runtime RPMs without build tools,
-development packages or an X server. Adapt its dependency list to your executable.
+| Integration | Recipe |
+| --- | --- |
+| Build plugin separately from the application | [Standalone build and runtime requirements](docs/integration/vncws.md#build-and-install) |
+| Launch one application over TCP/WebSocket | [Application + local viewer + browser URL](docs/integration/vncws.md#standalone-websocket) |
+| Launch one application over a private Unix socket | [Application + raw-RFB bridge + cleanup](docs/integration/vncws.md#unix-socket-transport) |
+| Have a parent own the TCP or Unix listener | [Runnable inherited-FD example and ownership contract](docs/integration/vncws.md#inherited-descriptor) |
+| Reuse our authenticated per-user workspace stack | [Build/start/adapt/verify the session stack](docs/integration/vncws.md#reuse-the-session-stack) |
+| Retain existing top-level windows and a window manager | [TigerVNC application porting path](docs/integration/README.md) |
+
+The [current integration guide](docs/integration/vncws.md) includes pinned viewer
+setup, diagnostics and verification prerequisites. The [clean-runtime fixture](tests/runtime/README.md)
+checks installed artifacts without development packages or an X server.
+[Historical qualification](docs/qualification/vncws.md) is separate from setup.
+Actual client dialogs, Qt ABI, native dependencies and Windows/RDP behavior still
+need qualification; the direct-Qt demo uses MDI without an external window manager.
 
 ## Authenticated workspace
+
+This default walkthrough uses **TigerVNC**. For the direct Qt transports, use the
+[explicit `qt-unix` or `qt-ws` recipe](docs/integration/vncws.md#reuse-the-session-stack).
 
 Requires a running Podman Linux engine, Python 3.12, uv, CMake >=3.25,
 and Ninja on the host. The application itself builds inside AlmaLinux 8.10 using

@@ -65,9 +65,25 @@ This is a standalone runtime/source-copy qualification for the probe and plugin.
 It does not qualify the client application's own dependencies, Qt build, CPU
 architecture, Windows/RDP input, authentication or production deployment.
 
-The same runtime image supports the Unix transport. To exercise that path without
-adding a bridge or development tools, run the native acceptance harness as root
-with `--entrypoint python3.12`, mounting `tests/vncws_unix.py` and an evidence
-directory as in the [Unix integration guide](../../docs/integration/vncws.md#unix-socket-transport).
-The harness launches Qt as UID 1000 and tests denied access as UID 1001.
-Authenticated browser qualification remains a separate application gate.
+## Unix transport in the same runtime image
+
+After building `localhost/swag-runtime-check:dev` above, run the native Unix
+acceptance harness. This does not need the HTTP server or published TCP ports:
+
+```sh
+mkdir -p artifacts/runtime-unix-check
+podman run --rm --name swag-runtime-unix-check --user 0 --entrypoint python3.12 \
+  --volume "$PWD/tests/vncws_unix.py:/tmp/check.py:ro,Z" \
+  --volume "$PWD/artifacts/runtime-unix-check:/artifacts:Z" \
+  localhost/swag-runtime-check:dev /tmp/check.py --output /artifacts
+```
+
+The harness launches Qt as UID 1000 and denied clients as UID 1001, exercising
+raw framing, permissions, inherited ownership, backpressure and cleanup. A normal
+run reports every check as `pass` and exits zero. This is native socket acceptance;
+it does not claim browser input coverage. For a complete browser-to-Unix setup,
+use the [standalone Unix viewer recipe](../../docs/integration/vncws.md#unix-socket-transport)
+or the [authenticated stack](../../docs/integration/vncws.md#reuse-the-session-stack).
+The former needs websockify outside this runtime-only fixture; the latter uses the
+manager's own bridge. Historical runtime evidence is in the
+[qualification record](../../docs/qualification/vncws.md#clean-runtime-transplant-qualification).

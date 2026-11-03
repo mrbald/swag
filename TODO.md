@@ -56,3 +56,5 @@ Root maintains this checklist. No separate task system.
 - [x] Add bounded Unix RFB plugin transport, safe pathname/inherited-FD ownership and native acceptance; commit/push.
 - [x] Integrate qt-unix manager/launcher and tools, verify lifetime/admission/cleanup and browser regressions; commit/push.
 - [x] Qualify integrated Unix transport, record limits and restore the demo using the safer mode.
+
+- [x] Reorganize integration recipes and qualification history; verify viewer/FD examples, peer-review and commit/push.

@@ -1,11 +1,91 @@
-# Hosting an existing multi-frame Qt 5 application in a browser
+# Adapting a Qt application to the authenticated workspace
 
-This is the porting guide distilled from this repository's working topology.
-The application still runs on Linux; the browser receives pixels and sends input.
-Start with the existing application's windows and a window manager. Move to MDI
-only if removing the window manager is worth the application changes.
+Use this guide when replacing the demo application while keeping this repository's
+session manager, launcher and browser shell. Qt runs on Linux; noVNC displays its
+pixels and sends input. The application contracts below apply to that managed
+integration. Merely loading the `vncws` plugin does not require `SWAG_USER`, a
+session lock or readiness JSON; a custom supervisor defines its own contracts.
+For plugin-only builds, standalone viewers and inherited-listener examples, start
+with the [direct Qt integration recipes](vncws.md).
 
-## Setup to reproduce
+## Choose a backend before adapting the application
+
+| Backend | Qt and helper processes | Application layout and appropriate starting point |
+| --- | --- | --- |
+| `tiger` with Openbox | Qt `xcb`, Xvnc, vncconfig, Openbox; private RFB Unix socket | Preserve an existing application's top-level windows while qualifying browser behavior. This is the default backend. |
+| `tiger` without Openbox | Qt `xcb`, Xvnc, vncconfig; private RFB Unix socket | The demo's MDI layout; internal X11 remains. |
+| `qt-ws` | Qt `vncws`; private loopback WebSocket listener | Direct Linux raster widgets. The demo launcher requires MDI and no external window manager. |
+| `qt-unix` | Qt `vncws`; private raw-RFB Unix socket | The same direct renderer with filesystem access control and a manager-owned listener. The demo launcher requires MDI and no external window manager. |
+
+The direct backends do not use `DISPLAY`, `xcb`, Xvnc, vncconfig or Openbox.
+They use the separately built `vncws` plugin, not the distribution's unpatched
+Qt VNC plugin. The [original rendering decision](../decisions/rendering.md)
+concerns that unpatched plugin; it is not a comparison of the current backends.
+
+MDI is this demo's qualified direct-Qt application layout and launcher policy,
+not a requirement enforced by the plugin itself. `SWAG_UI_MODE` does not convert
+an arbitrary application to MDI. Other layouts, dialogs and native windows need
+their own qualification; see [application layout](#application-layout).
+
+## Reproduce the selected managed path
+
+Run from the repository root with a running Podman Linux engine, Python 3.12, uv,
+CMake >=3.25 and Ninja. No host Qt SDK is needed. Browser checks require installed
+Google Chrome (`channel="chrome"`); `uv sync` does not install it, and Playwright's
+bundled Chromium alone does not satisfy that selection.
+
+```sh
+uv sync --locked
+cmake --preset container
+```
+
+Choose **one** of the following build/start pairs. Every `up` recreates the demo
+stack and ends existing workspaces while preserving database records. These
+commands start the demo MDI application before you replace it.
+
+TigerVNC, MDI without Openbox:
+
+```sh
+python3.12 tools/app.py build --render-backend tiger
+python3.12 tools/app.py up --render-backend tiger --ui-mode mdi
+```
+
+Direct Qt over WebSocket:
+
+```sh
+python3.12 tools/app.py build --render-backend qt-ws
+python3.12 tools/app.py up --render-backend qt-ws --ui-mode mdi
+```
+
+Direct Qt over a Unix socket:
+
+```sh
+python3.12 tools/app.py build --render-backend qt-unix
+python3.12 tools/app.py up --render-backend qt-unix --ui-mode mdi
+```
+
+For the Tiger path with existing top-level windows, select
+`--ui-mode single --window-manager openbox` on `up`. Direct backends reject that combination.
+Open <http://localhost:6081>; log in as `alice / demo` or `bob / demo` in separate
+browser profiles/private windows. Keep the exact `localhost` origin for OIDC,
+CSRF and WebSocket checks. `python3.12 tools/app.py down` preserves the database.
+
+The images build on AlmaLinux 8.10 with GCC Toolset 15, C++23, Qt 5.15.3 and
+Python 3.12. Keep your application's Qt modules, plugins, fonts and native
+libraries in the image; the demo's packages are only a starting point.
+For `qt-unix`, keep `SWAG_RUNTIME_DIR` canonical, private and short; the
+[Unix transport contract](vncws.md) explains the path and ownership checks.
+
+## Managed topology
+
+All backends use browser → authenticated NGINX → session manager → private
+renderer endpoint. Only NGINX publishes a host port (`127.0.0.1:6081` in the demo).
+The manager selects the authenticated user's current generation; the browser
+cannot select an arbitrary endpoint. One Qt process runs per active user under
+the shared service UID. Multiple app hosts need an additional ownership/routing
+design; this implementation demonstrates one host.
+
+The diagram below is specifically the **TigerVNC** path:
 
 ```mermaid
 flowchart LR
@@ -25,47 +105,11 @@ flowchart LR
   A --> D[(Backend-owned database)]
 ```
 
-Only NGINX publishes a host port, `127.0.0.1:6081` in the demo. Each username has
-its own Qt process, display and RFB socket; all run under one service account.
-The session manager selects `/run/swag/users/{user}/{generation}/rfb.sock` from
-authenticated identity. NGINX does not construct arbitrary filesystem paths or
-route directly to a user-supplied socket. No per-user TCP port or websockify
-process is needed. Multiple app hosts would need an additional ownership/routing
-design; this implementation proves a single host.
-
-The selected renderer is **TigerVNC**, using Qt's `xcb` platform plugin. The tested
-Qt 5.15.3 VNC plugin passed 9/13 interaction checks but failed wheel input,
-non-Latin-1 keys and both clipboard directions. TigerVNC passed 13/13 over TCP
-and Unix sockets. These results concern the packaged Qt VNC plugin.
-The separately built `vncws` plugin now supports direct WebSocket and private
-Unix socket transports without X11; see the [plugin integration guide](vncws.md).
-These findings concern the tested package; see the [rendering decision](../decisions/rendering.md).
-This setup retains internal X11 and needs no host X server or mounted host X socket.
-
-## First run, before replacing the application
-
-From the repository root, with a running Podman Linux engine, Python 3.12, uv,
-CMake >=3.25 and Ninja:
-
-```sh
-uv sync --locked
-cmake --preset container
-cmake --build --preset container --target app-build
-cmake --build --preset container --target app-up-mdi
-```
-
-Open <http://localhost:6081>; use `alice / demo` or `bob / demo`. A separate browser
-profile/private window gives the second user a separate login. The exact
-`localhost` origin matters for OIDC callbacks, CSRF and WebSocket checks.
-`app-up-mdi` starts this demo's MDI UI without Openbox. `app-up` selects its
-single-view UI with Openbox. Either up command recreates the stack and ends
-workspaces; it preserves database records. `app-down` also preserves the database.
-
-The application/edge images build on AlmaLinux 8.10 with GCC Toolset 15, C++23,
-Qt 5.15.3 and Python 3.12. No host Qt SDK is required. Authentication sidecars use
-pinned upstream images. Keep the existing application's required Qt modules,
-plugins, fonts and native libraries in the image; the demo's package list is a
-starting point, not a complete dependency list for another application.
+For `qt-ws`, the manager relays binary WebSocket data to Qt's private loopback
+listener. For `qt-unix`, it bridges browser WebSocket messages to raw RFB at
+`/run/swag/users/{user}/{generation}/rfb.sock`. Neither direct path has the Xvnc,
+X11 or vncconfig boxes shown above, and neither needs a websockify helper.
+The [direct Qt recipes](vncws.md) describe their descriptor handoff and teardown.
 
 ## What to reuse and replace
 
@@ -80,7 +124,12 @@ starting point, not a complete dependency list for another application.
 | [Mock bank](../../python/swag_bank) | Replace with your shared backend. SQLite and schema-generated CRUD demonstrate data behavior; they are not required by the rendering/session topology. Qt never opens the database. |
 | [Rendering probe](../../src/probe), [browser checks](../../tests/browser) | Keep the small renderer gate; adapt application-specific canvas checks and observations to your widgets. |
 
-## Required application contracts
+## Application contracts when reusing this manager
+
+Implement these contracts when replacing `swag-desktop` in the managed paths
+above. They belong to the supervisor/application boundary, not to QPA plugin
+loading. With a custom supervisor, define equivalent identity, ownership,
+readiness and lifetime behavior using its own interface.
 
 **Identity.** NGINX authenticates and overwrites `X-Swag-User` and
 `X-Swag-Proxy-Key`; the private manager validates both. Usernames are stable,
@@ -144,17 +193,21 @@ shell running. The demo's separate browser **End session & sign out** forcibly
 ends the workspace, including unsaved edits; it does not pass through Qt's Quit
 confirmation and does not globally log out the identity provider.
 
-## Multi-frame Qt choices and pitfalls
+## Application layout
 
-**Keep existing top-level windows first.** Run with Openbox while establishing
-authentication, input, reconnect and lifetime behavior. The launcher already
-supports `SWAG_WINDOW_MANAGER=openbox`; the driver exposes
-`--window-manager openbox`. A multi-window application need not become MDI to
-use this topology. Preserve its window manager until its dialogs, tool windows
-and focus behavior have been qualified without one.
+**TigerVNC with existing top-level windows.** Keep Openbox while establishing
+authentication, input, reconnect and lifetime behavior. Select
+`SWAG_WINDOW_MANAGER=openbox` or `--window-manager openbox` on the Tiger path.
+A multi-window application need not become MDI to use that topology. Qualify its
+dialogs, tool windows and focus before removing its window manager.
 
-**For MDI, refactor views into child widgets.** Use one root `QMainWindow` with
-`QMdiArea` and `QMdiSubWindow` children. Extract view content from top-level
+**Direct Qt.** Use the qualified MDI shell as the starting point when reusing
+this launcher. Openbox cannot manage the direct renderer's windows. Application
+changes such as widget ownership, dialog behavior and screen fitting remain
+separate from loading the QPA plugin.
+
+**MDI on either renderer.** Refactor views into child widgets. Use one root
+`QMainWindow` with `QMdiArea` and `QMdiSubWindow` children. Extract view content from top-level
 windows and review ownership, window flags, menus, toolbars and close behavior.
 Give each child its own model/filter/form/request state, including duplicate
 views of the same entity. The demo opens the first frame maximized and additional
@@ -178,23 +231,26 @@ disconnected/cancelled. The demo disconnects reply callbacks before `abort()`
 and uses guarded widget pointers. Preserve these rules when extracting panes.
 
 **Fit the root explicitly without a window manager.** noVNC `resizeSession`
-requests an Xvnc framebuffer matching its canvas. Qt `showFullScreen()` alone
-did not keep the root fitted after display changes. Follow `QScreen::geometryChanged`
+requests a framebuffer matching its canvas, from Xvnc on Tiger or the Qt plugin
+on a direct backend. Qt `showFullScreen()` alone did not keep the root fitted after display changes. Follow `QScreen::geometryChanged`
 with a queued `setGeometry(screen->geometry())`, and rebind when the window's
 screen changes; see `followScreen`, `watchScreen` and `fitScreen`. Recenter modals
 and keep the active child reachable after shrink. Other normal children retain
 their layout and may need scrolling or Tile. Do not recreate Qt on resize.
 
-## Transport and browser lessons
+## Transport and browser behavior
 
-- Keep `QT_QPA_PLATFORM=xcb`, a unique `DISPLAY` and private per-launch XDG
+- **Tiger only:** keep `QT_QPA_PLATFORM=xcb`, a unique `DISPLAY` and private per-launch XDG
   config/cache/runtime paths. The launcher starts Xvnc with RFB TCP disabled
   (`-rfbport -1`), `-rfbunixpath`, mode `0600`, and X11 TCP disabled
   (`-nolisten tcp`). Runtime directories are `0700`. Its `SecurityTypes=None`
   and `-ac` rely on the private local sockets/shared-account trust model; they
   are not settings for a public VNC listener.
-- Keep `vncconfig -nowin`: it supplies X11 clipboard ownership in this setup.
-  Clipboard checks must cover both directions, with real text pasted into Qt.
+- **Tiger only:** keep `vncconfig -nowin` for X11 clipboard ownership. Direct Qt
+  implements clipboard transfer in the plugin; do not start vncconfig there.
+- **All backends:** check clipboard in both directions with real text pasted into
+  Qt. An independently embedded noVNC viewer also needs the
+  [clipboard availability integration](vncws.md#prepare-the-local-viewer).
 - Enable noVNC local scaling during resize negotiation. Below the demo's
   800×600 canvas floor, pause remote resizing and scale the whole desktop;
   choose that floor from your app's minimum usable layout. The active viewer
@@ -225,10 +281,10 @@ The [testing design memo](../../tests/README.md) explains how Playwright targets
 Qt widgets through observation geometry and browser input, and which assertions
 and visual checks need adapting to your application.
 
-Run the existing checks **sequentially** on an idle MDI demo; they change data
-and end test workspaces. These four harnesses require installed Google Chrome
-(`channel="chrome"`); `uv sync` installs the Python dependencies, not the browser.
-Installing Playwright's bundled Chromium alone does not satisfy that selection.
+Run the existing checks **sequentially** on an idle MDI demo started above;
+they change data and end test workspaces. Match the checks to the running backend.
+
+For `tiger`:
 
 ```sh
 cmake --build --preset container --target app-mdi-check
@@ -236,6 +292,19 @@ cmake --build --preset container --target app-resize-check
 cmake --build --preset container --target app-presentation-check
 cmake --build --preset container --target app-check
 ```
+
+For `qt-unix` (use `--backend qt-ws` for a running `qt-ws` stack):
+
+```sh
+.venv/bin/python tools/check_vncws.py --backend qt-unix \
+  --suite app-mdi --suite app-workspace --suite app-resize --suite app-clipboard
+.venv/bin/python tests/browser/login_state.py
+```
+
+These selected application suites use the application image built above. The
+separate default protocol/probe suites require a **probe** image; follow their
+build/run steps in the [direct Qt integration guide](vncws.md). The Tiger CMake
+gates default to `tiger`; do not run them unchanged against a direct backend.
 
 Then adapt the checks to the real application. The acceptance gate should cover:
 
@@ -255,14 +324,16 @@ Then adapt the checks to the real application. The acceptance gate should cover:
 
 Results/screenshots live under ignored `artifacts/`; per-generation logs are in
 `artifacts/stack/workspaces/users/{user}/{generation}/`. Inspect `launcher.log`,
-`launcher.json`, `qt.log`, `xvnc.log` and `vncconfig.log` when launch/input fails.
+`launcher.json` and `qt.log` when launch/input fails. The Tiger path additionally
+has `xvnc.log` and `vncconfig.log`; these files are absent on direct Qt.
 The persistent mock DB is `artifacts/stack/data/bank.sqlite3`. Protect generated
 secrets under `artifacts/stack/config/`; do not copy runtime artifacts into Git.
 
 The measured environment is native ARM64 Podman, AlmaLinux 8.10/GCC 15/Qt 5.15.3,
-and Chrome 155 on macOS. Entra, external HTTPS/secure-cookie configuration,
-x86_64/Docker, other browsers, IMEs/CJK fonts, WAN performance, capacity and
-multi-host failover remain unqualified. Mock SQLite initialization uses
-`create_all`, without schema migrations. Detailed results and boundaries are in
+and installed Chrome on macOS. Entra, external HTTPS/secure-cookie configuration,
+x86_64/Docker, other browsers, IMEs, client font coverage, production WAN/capacity
+and multi-host failover remain unqualified. Bounded local network/soak results
+and demonstrated font coverage do not replace the actual client acceptance gate.
+Mock SQLite initialization uses `create_all`, without schema migrations. Detailed results and boundaries are in
 [Findings and limits](../findings.md); exact environment/API names are in
 [the integration contract](../interfaces.md).

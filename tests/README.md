@@ -185,7 +185,7 @@ Keep observation files and screenshots private: they can contain form contents.
 Full artifacts and generated credentials are not committed. Recorded runtime
 results and environment qualifications are in [Findings and limits](../docs/findings.md)
 and the [rendering decision](../docs/decisions/rendering.md). The
-[vncws qualification record](../docs/integration/vncws.md) describes the separate
+[vncws qualification record](../docs/qualification/vncws.md) describes the separate
 synthetic network/soak runs, ultrawide acceptance and Japanese glyph verification.
 Ordinary functional checks alone do not establish those properties. Actual client
 Qt/private-library compatibility, Windows/RDP keyboard layouts and IMEs, broader

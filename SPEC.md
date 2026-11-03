@@ -204,3 +204,8 @@ in an owned mode-0700 directory; manager retains an inherited listener until loc
 generation teardown. Reject unsafe paths and preserve foreign files/replacements.
 Verify native transport/permissions/lifecycle, then real noVNC and original app
 workflows; integration/nonfunctional gates last. Commit/push tested slices.
+
+Approved documentation follow-up: organize integration by reader task; provide
+complete local viewer and inherited-FD examples, distinguish plugin-only loading
+from supervised application contracts, and separate historical qualification.
+Verify runnable recipes, peer-review, then commit/push.
