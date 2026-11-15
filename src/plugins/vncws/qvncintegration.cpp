@@ -40,12 +40,12 @@
 #include "qvncintegration.h"
 #include "qvncscreen.h"
 #include "qvnc_p.h"
+#include "qvncbackingstore.h"
 
 #include <QtFontDatabaseSupport/private/qgenericunixfontdatabase_p.h>
 #include <QtServiceSupport/private/qgenericunixservices_p.h>
 #include <QtEventDispatcherSupport/private/qgenericunixeventdispatcher_p.h>
 
-#include <QtFbSupport/private/qfbbackingstore_p.h>
 #include <QtFbSupport/private/qfbwindow_p.h>
 #include <QtFbSupport/private/qfbcursor_p.h>
 
@@ -217,7 +217,7 @@ bool QVncIntegration::hasCapability(QPlatformIntegration::Capability cap) const
 
 QPlatformBackingStore *QVncIntegration::createPlatformBackingStore(QWindow *window) const
 {
-    return new QFbBackingStore(window);
+    return new QVncBackingStore(window);
 }
 
 QPlatformWindow *QVncIntegration::createPlatformWindow(QWindow *window) const

@@ -44,3 +44,22 @@ and [compositor locking](https://github.com/qt/qtbase/blob/v5.15.2/src/platforms
 
 Pattern references: [context-bound singleShot](https://doc.qt.io/qt-5/qtimer.html#singleShot-4)
 and [asynchronous QDialog::open](https://doc.qt.io/qt-5/qdialog.html#open).
+
+## Backend containment in vncws
+
+`QVncBackingStore` avoids holding Qt's image mutex across application painting,
+so this nested dialog can be composited and dismissed. The standard Qt compositor
+is unchanged. Its image copy may snapshot an interrupted paint; ordinary paints
+do not acquire a new snapshot or maintain a second buffer. This relies on
+backing-store access staying on the GUI thread, checked by debug assertions.
+
+Resizes requested during painting wait until the outer paint ends, preserving
+existing pixels and clearing newly allocated space. Newly exposed or reentrantly
+painted content may remain blank or stale until the application explicitly
+invalidates it; the plugin does not schedule a full QWidget repaint. Nested painting of the same widget, recursive
+error-dialog chains, or deleting an actively painted widget remain application
+reentrancy errors; use the asynchronous pattern above. For diagnostics, enable
+`QT_LOGGING_RULES="vncws.paint.debug=true"` (exceptional messages are limited per
+backing store).
+
+[Validation and performance evidence](docs/qualification/framebuffer-reentrancy.md).

@@ -18,6 +18,7 @@ add_library(qvncws MODULE
     qvnc.cpp qvnc_p.h
     qvncclient.cpp qvncclient.h
     qvncintegration.cpp qvncintegration.h
+    qvncbackingstore.cpp qvncbackingstore.h
     qvncscreen.cpp qvncscreen.h
     qvncwebsocketstream.cpp qvncwebsocketstream.h
     qvncstream.h

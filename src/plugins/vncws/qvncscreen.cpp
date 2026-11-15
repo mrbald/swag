@@ -57,6 +57,7 @@ QVncScreen::QVncScreen(const QSize &size)
 
 QVncScreen::~QVncScreen()
 {
+    delete dirty;
 #if QT_CONFIG(cursor)
     if (clientCursor)
         delete clientCursor;

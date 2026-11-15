@@ -213,3 +213,20 @@ Verify runnable recipes, peer-review, then commit/push.
 Approved noVNC packaging follow-up: track the clipboard change as a conventional
 unified patch against pinned, non-minified upstream source. Keep checksum guards,
 document manual application, and verify identical viewer output before commit/push.
+
+## Approved framebuffer reentrancy hardening
+
+Tolerate the reported single-GUI-thread `paintEvent -> model::data ->
+QDialog::exec -> framebuffer redraw` deadlock in the direct Qt plugin. Target
+RHEL8 Linux, Qt 5.15 private APIs and GCC Toolset 15/C++23. Optimize for normal
+operation (99%+): avoid continuous snapshots or extra framebuffer copies solely
+for this exceptional application bug. A temporarily incomplete parent frame is
+acceptable while its modal dialog remains visible and usable. Preserve ordinary
+painting, dirty regions, stacking, cursor and resize behavior; do not claim to
+make arbitrary reentrant widget mutation safe.
+
+Use Opus-5.5/xhigh for design review, Sol xhigh for implementation, then
+Opus-5.5/high for code review. Reproduce the baseline hang, verify real noVNC
+dismissal and resumed painting, compare independently decoded Raw/zlib pixels,
+and measure the same normal-paint workload with the same executable before and
+after. Distinguish local EL8 ARM64 evidence from the client's exact x86-64 build.

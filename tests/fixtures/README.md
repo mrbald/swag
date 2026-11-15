@@ -49,3 +49,14 @@ The supplied EL8 images install `google-noto-sans-cjk-jp-fonts` for this fallbac
 Also inspect the probe's initial Draft text through noVNC: preserving Unicode
 codepoints alone does not prove that readable glyphs are rendered. This sample
 does not qualify IME input or complete coverage of other scripts.
+
+## Paint reentrancy and backing-store safety
+
+`vncws_reentrant.cpp` reproduces a modal `exec()` entered from table `data()`
+during painting. `vncws_backingstore.cpp` checks the actual QPA factory's store
+under nested painting/resizing. `vncws_paint_benchmark.cpp` compares ordinary
+paint/composite cost using one executable. The standalone CMake project in this
+directory builds these three C++23 fixtures; it does not change the other fixtures.
+
+See [qualification and commands](../../docs/qualification/framebuffer-reentrancy.md)
+for browser/wire gates, sanitizer flags, measurements and explicit limitations.

@@ -59,3 +59,6 @@ Root maintains this checklist. No separate task system.
 
 - [x] Reorganize integration recipes and qualification history; verify viewer/FD examples, peer-review and commit/push.
 - [x] Track and conventionally apply the noVNC clipboard patch; verify unchanged output and failure guards, peer-review and commit/push.
+
+- [x] Review and implement GUI-thread framebuffer reentrancy hardening for RHEL8/Qt 5.15, prioritizing normal-path cost.
+- [x] Reproduce baseline, verify noVNC/wire recovery and normal-paint performance, complete independent Opus review and record limitations.
